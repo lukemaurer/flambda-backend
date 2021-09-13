@@ -1,7 +1,21 @@
 # Hacking on the Flambda backend
 
 This page is intended to keep track of useful information for people who
-want to modify the Flambda backend.
+want to modify the Flambda backend.  Jump to:
+
+  - [Branches, pull requests, etc.](#branches-pull-requests-etc)
+  - [Upstream subtree](#upstream-subtree)
+  - [Code formatting](#code-formatting)
+  - [Rebuilding during dev work](#rebuilding-during-dev-work)
+  - [Running tests](#running-tests)
+  - [Running only part of the upstream testsuite](#running-only-part-of-the-upstream-testsuite)
+  - [Running the compiler produced by "make hacking" on an example without the stdlib](#running-the-compiler-produced-by-make-hacking-on-an-example-without-the-stdlib)
+  - [Getting the compilation command for a stdlib file](#getting-the-compilation-command-for-a-stdlib-file)
+  - [Testing the compiler built locally with OPAM](#testing-the-compiler-built-locally-with-opam)
+  - [Pulling changes onto a release branch](#pulling-changes-onto-a-release-branch)
+  - [Rebasing to a new major version of the upstream compiler](#rebasing-to-a-new-major-version-of-the-upstream-compiler)
+  - [How to add a new intrinsic to the compiler](#how-to-add-a-new-intrinsic-to-the-compiler)
+  - [Installation tree comparison script](#installation-tree-comparison-script)
 
 ## Branches, pull requests, etc.
 
@@ -113,12 +127,13 @@ PATH=<FLAMBDA_BACKEND>/_build1/install/default/bin:$PATH <DUNE> build --profile=
 ```
 where `<FLAMBDA_BACKEND>` is the path to your clone and `<DUNE>` is the path to the dune provided to `configure`.
 
-## Testing the compiler built locally with opam
+## Testing the compiler built locally with OPAM
 
-It is possible to create an `opam` switch with the Flambda backend compiler.
+It is possible to create a OPAM switch with the Flambda backend compiler.
 
 First, you'll need to install the `opam-custom-install` plugin. See
 [here](https://gitlab.ocamlpro.com/louis/opam-custom-install) for instructions.
+(This can be done in any OPAM switch, e.g. a standard 4.12.0 switch.)
 
 Then you'll need to create an empty switch. The recommended way is to use a
 local switch in the Flambda backend directory:
@@ -126,6 +141,11 @@ local switch in the Flambda backend directory:
 ```shell
 opam switch create . --empty
 ```
+
+(A global switch can also be used, in which case the `--prefix` argument
+to `configure` given below needs to point at the switch directory under the OPAM root.
+It is also necessary to `opam switch` to the new switch and then update the current
+environment with `opam env` after the above `opam switch create` command.)
 
 The Flambda backend must also be configured with this switch as prefix
 (this can be done before actually creating the switch, the directory only
@@ -143,7 +163,9 @@ opam custom-install ocaml-variants.4.12.0+flambda2+trunk -- make install
 ```
 
 The exact version doesn't matter that much, but the version number should
-match the one in the Flambda backend tree.
+match the one in the Flambda backend tree.  (The name of the package given
+here is independent of the name of the switch.)
+
 To finish the installation, `opam install ocaml` will install the remaining
 auxiliary packages necessary for a regular switch. After that, normal opam
 packages can be installed the usual way.
