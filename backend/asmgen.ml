@@ -279,6 +279,40 @@ let asm_filename output_prefix =
     then output_prefix ^ ext_asm
     else Filename.temp_file "camlasm" ext_asm
 
+let dump_gc_stats ~prefixname =
+  let flatten filename =
+    StringLabels.map filename ~f:(function
+      | '/' -> '+'
+      | c -> c)
+  in
+  let filename =
+    Format.sprintf "/usr/local/home/lmaurer/ocamlc-gc-stats/%s-%x.gcstats"
+      (prefixname |> flatten)
+      (Random.int 0x1000_0000)
+  in
+  let out = open_out filename in
+  Misc.try_finally
+    ~always:(fun () -> close_out out)
+    (fun () ->
+       let { Gc.minor_collections
+           ; major_collections
+           ; compactions
+           ; top_heap_words
+           ; _
+           } = Gc.quick_stat ()
+       in
+       Printf.fprintf out
+         "((name %s)\
+          (top_heap_words %d)\
+          (minor_collections %d)\
+          (major_collections %d)\
+          (compactions %d))"
+         prefixname
+         top_heap_words
+         minor_collections
+         major_collections
+         compactions)
+
 let compile_implementation ?toplevel ~backend ~filename ~prefixname ~middle_end
       ~ppf_dump (program : Lambda.program) =
   compile_unit ~output_prefix:prefixname
@@ -289,7 +323,9 @@ let compile_implementation ?toplevel ~backend ~filename ~prefixname ~middle_end
       let clambda_with_constants =
         middle_end ~backend ~filename ~prefixname ~ppf_dump program
       in
-      end_gen_implementation ?toplevel ~ppf_dump clambda_with_constants)
+      end_gen_implementation ?toplevel ~ppf_dump clambda_with_constants;
+      dump_gc_stats ~prefixname
+    )
 
 type middle_end_flambda2 =
      ppf_dump:Format.formatter
@@ -315,7 +351,8 @@ let compile_implementation_flambda2 ?toplevel ~backend ~filename ~prefixname
           ~ppf_dump ~module_ident ~module_initializer
       in
       let cmm_phrases = flambda2_to_cmm middle_end_result in
-      end_gen_implementation0 ?toplevel ~ppf_dump (fun () -> cmm_phrases))
+      end_gen_implementation0 ?toplevel ~ppf_dump (fun () -> cmm_phrases);
+      dump_gc_stats ~prefixname)
 
 let linear_gen_implementation filename =
   let open Linear_format in
