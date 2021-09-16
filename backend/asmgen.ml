@@ -306,7 +306,7 @@ let dump_gc_stats ~prefixname =
           (top_heap_words %d)\
           (minor_collections %d)\
           (major_collections %d)\
-          (compactions %d))"
+          (compactions %d))\n"
          prefixname
          top_heap_words
          minor_collections
