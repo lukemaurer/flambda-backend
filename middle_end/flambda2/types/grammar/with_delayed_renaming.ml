@@ -58,8 +58,9 @@ let[@inline always] free_names ~apply_renaming_descr ~free_names_descr t =
     t.free_names <- Some free_names;
     free_names
 
-let remove_unused_closure_vars ~apply_renaming_descr ~free_names_descr
-    ~remove_unused_closure_vars_descr t ~used_closure_vars =
+let remove_unused_closure_vars_and_shortcut_aliases ~apply_renaming_descr
+    ~free_names_descr ~remove_unused_closure_vars_and_shortcut_aliases_descr t
+    ~used_closure_vars ~canonicalise =
   let descr_known_to_contain_no_unused_closure_vars =
     (* If the free names are already computed (modulo application of a
        renaming), we can use them as a shortcut, to potentially avoid traversing
@@ -78,9 +79,9 @@ let remove_unused_closure_vars ~apply_renaming_descr ~free_names_descr
   then t
   else
     let descr =
-      remove_unused_closure_vars_descr
+      remove_unused_closure_vars_and_shortcut_aliases_descr
         (descr ~apply_renaming_descr ~free_names_descr t)
-        ~used_closure_vars
+        ~used_closure_vars ~canonicalise
     in
     t.descr <- descr;
     assert (Renaming.is_empty t.delayed_permutation);
