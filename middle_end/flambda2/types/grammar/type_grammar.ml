@@ -1921,33 +1921,13 @@ let kind t =
 
 let get_alias_exn t =
   match t with
-  | Value ty ->
-    TD.get_alias_exn ty ~apply_renaming_head:apply_renaming_head_of_kind_value
-      ~free_names_head:free_names_head_of_kind_value
-  | Naked_immediate ty ->
-    TD.get_alias_exn ty
-      ~apply_renaming_head:apply_renaming_head_of_kind_naked_immediate
-      ~free_names_head:free_names_head_of_kind_naked_immediate
-  | Naked_float ty ->
-    TD.get_alias_exn ty
-      ~apply_renaming_head:apply_renaming_head_of_kind_naked_float
-      ~free_names_head:free_names_head_of_kind_naked_float
-  | Naked_int32 ty ->
-    TD.get_alias_exn ty
-      ~apply_renaming_head:apply_renaming_head_of_kind_naked_int32
-      ~free_names_head:free_names_head_of_kind_naked_int32
-  | Naked_int64 ty ->
-    TD.get_alias_exn ty
-      ~apply_renaming_head:apply_renaming_head_of_kind_naked_int64
-      ~free_names_head:free_names_head_of_kind_naked_int64
-  | Naked_nativeint ty ->
-    TD.get_alias_exn ty
-      ~apply_renaming_head:apply_renaming_head_of_kind_naked_nativeint
-      ~free_names_head:free_names_head_of_kind_naked_nativeint
-  | Rec_info ty ->
-    TD.get_alias_exn ty
-      ~apply_renaming_head:apply_renaming_head_of_kind_rec_info
-      ~free_names_head:free_names_head_of_kind_rec_info
+  | Value ty -> TD.get_alias_exn ty
+  | Naked_immediate ty -> TD.get_alias_exn ty
+  | Naked_float ty -> TD.get_alias_exn ty
+  | Naked_int32 ty -> TD.get_alias_exn ty
+  | Naked_int64 ty -> TD.get_alias_exn ty
+  | Naked_nativeint ty -> TD.get_alias_exn ty
+  | Rec_info ty -> TD.get_alias_exn ty
 
 let is_obviously_bottom t =
   match t with

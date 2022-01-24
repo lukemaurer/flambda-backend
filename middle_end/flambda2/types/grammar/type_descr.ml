@@ -64,11 +64,7 @@ module T : sig
 
   val is_obviously_unknown : _ t -> bool
 
-  val get_alias_exn :
-    apply_renaming_head:('head -> Renaming.t -> 'head) ->
-    free_names_head:('head -> Name_occurrences.t) ->
-    'head t ->
-    Simple.t
+  val get_alias_exn : _ t -> Simple.t
 
   val apply_renaming : 'head t -> Renaming.t -> 'head t
 
@@ -130,23 +126,24 @@ end = struct
 
   module WDR = With_delayed_renaming
 
-  type 'head t = 'head Descr.t WDR.t Or_unknown_or_bottom.t
+  type 'head t = 'head WDR.t Descr.t Or_unknown_or_bottom.t
 
-  let[@inline always] descr ~apply_renaming_head ~free_names_head (t : _ t) :
-      _ Descr.t Or_unknown_or_bottom.t =
+  let[@inline always] descr ~apply_renaming_head ~free_names_head (t : 'head t)
+      : 'head Descr.t Or_unknown_or_bottom.t =
     match t with
     | Unknown -> Unknown
     | Bottom -> Bottom
-    | Ok wdp ->
-      Ok
-        (WDR.descr
-           ~apply_renaming_descr:(Descr.apply_renaming ~apply_renaming_head)
-           ~free_names_descr:(Descr.free_names ~free_names_head)
-           wdp)
+    | Ok (Equals simple) -> Ok (Equals simple)
+    | Ok (No_alias wdp) ->
+      let head =
+        WDR.descr ~apply_renaming_descr:apply_renaming_head
+          ~free_names_descr:free_names_head wdp
+      in
+      Ok (No_alias head)
 
-  let create head : _ t = Ok (WDR.create (Descr.No_alias head))
+  let create head : _ t = Ok (Descr.No_alias (WDR.create head))
 
-  let create_equals simple : _ t = Ok (WDR.create (Descr.Equals simple))
+  let create_equals simple : _ t = Ok (Descr.Equals simple)
 
   let bottom : _ t = Bottom
 
@@ -158,55 +155,46 @@ end = struct
   let is_obviously_unknown (t : _ t) =
     match t with Unknown -> true | Bottom | Ok _ -> false
 
-  let[@inline always] get_alias_exn ~apply_renaming_head ~free_names_head
-      (t : _ t) =
+  let[@inline always] get_alias_exn (t : _ t) =
     match t with
-    | Unknown | Bottom -> raise Not_found
-    | Ok wdp -> (
-      (* This uses [peek_descr] first to avoid unnecessary application of
-         permutations. *)
-      match WDR.peek_descr wdp with
-      | No_alias _ -> raise Not_found
-      | Equals _ -> (
-        match
-          WDR.descr
-            ~apply_renaming_descr:(Descr.apply_renaming ~apply_renaming_head)
-            ~free_names_descr:(Descr.free_names ~free_names_head)
-            wdp
-        with
-        | Equals alias -> alias
-        | No_alias _ -> assert false))
+    | Unknown | Bottom | Ok (No_alias _) -> raise Not_found
+    | Ok (Equals alias) -> alias
 
   let apply_renaming (t : _ t) renaming : _ t =
     match t with
     | Unknown | Bottom -> t
-    | Ok wdp ->
-      let wdp' = WDR.apply_renaming wdp renaming in
-      if wdp == wdp' then t else Ok wdp'
+    | Ok descr ->
+      let descr' =
+        Descr.apply_renaming ~apply_renaming_head:WDR.apply_renaming descr
+          renaming
+      in
+      if descr == descr' then t else Ok descr'
 
   let free_names ~apply_renaming_head ~free_names_head (t : _ t) =
     match t with
     | Unknown | Bottom -> Name_occurrences.empty
-    | Ok wdp ->
-      WDR.free_names
-        ~apply_renaming_descr:(Descr.apply_renaming ~apply_renaming_head)
-        ~free_names_descr:(Descr.free_names ~free_names_head)
-        wdp
+    | Ok descr ->
+      Descr.free_names
+        ~free_names_head:
+          (WDR.free_names ~apply_renaming_descr:apply_renaming_head
+             ~free_names_descr:free_names_head)
+        descr
 
   let remove_unused_closure_vars ~apply_renaming_head ~free_names_head
       ~remove_unused_closure_vars_head (t : _ t) ~used_closure_vars : _ t =
     match t with
     | Unknown | Bottom -> t
-    | Ok wdr ->
-      let wdr' =
-        WDR.remove_unused_closure_vars
-          ~apply_renaming_descr:(Descr.apply_renaming ~apply_renaming_head)
-          ~free_names_descr:(Descr.free_names ~free_names_head)
-          ~remove_unused_closure_vars_descr:
-            (Descr.remove_unused_closure_vars ~remove_unused_closure_vars_head)
-          wdr ~used_closure_vars
+    | Ok descr ->
+      let descr' =
+        Descr.remove_unused_closure_vars
+          ~remove_unused_closure_vars_head:
+            (WDR.remove_unused_closure_vars
+               ~apply_renaming_descr:apply_renaming_head
+               ~free_names_descr:free_names_head
+               ~remove_unused_closure_vars_descr:remove_unused_closure_vars_head)
+          descr ~used_closure_vars
       in
-      if wdr == wdr' then t else Ok wdr'
+      if descr == descr' then t else Ok descr'
 end
 
 include T

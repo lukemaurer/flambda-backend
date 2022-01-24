@@ -48,11 +48,7 @@ val is_obviously_bottom : _ t -> bool
 
 val is_obviously_unknown : _ t -> bool
 
-val get_alias_exn :
-  apply_renaming_head:('head -> Renaming.t -> 'head) ->
-  free_names_head:('head -> Name_occurrences.t) ->
-  'head t ->
-  Simple.t
+val get_alias_exn : _ t -> Simple.t
 
 val apply_coercion :
   apply_coercion_head:('head -> Coercion.t -> 'head Or_bottom.t) ->
