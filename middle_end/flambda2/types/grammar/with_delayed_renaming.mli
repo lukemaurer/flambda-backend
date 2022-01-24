@@ -55,11 +55,15 @@ val free_names :
   'descr t ->
   Name_occurrences.t
 
-val remove_unused_closure_vars :
+val remove_unused_closure_vars_and_shortcut_aliases :
   apply_renaming_descr:('descr -> Renaming.t -> 'descr) ->
   free_names_descr:('descr -> Name_occurrences.t) ->
-  remove_unused_closure_vars_descr:
-    ('descr -> used_closure_vars:Var_within_closure.Set.t -> 'descr) ->
+  remove_unused_closure_vars_and_shortcut_aliases_descr:
+    ('descr ->
+    used_closure_vars:Var_within_closure.Set.t ->
+    canonicalise:(Simple.t -> Simple.t) ->
+    'descr) ->
   'descr t ->
   used_closure_vars:Var_within_closure.Set.t ->
+  canonicalise:(Simple.t -> Simple.t) ->
   'descr t
