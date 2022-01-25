@@ -66,7 +66,12 @@ module T : sig
 
   val get_alias_exn : _ t -> Simple.t
 
-  val apply_renaming : 'head t -> Renaming.t -> 'head t
+  val apply_renaming :
+    apply_renaming_head:('head -> Renaming.t -> 'head) ->
+    free_names_head:('head -> Name_occurrences.t) ->
+    'head t ->
+    Renaming.t ->
+    'head t
 
   val free_names :
     apply_renaming_head:('head -> Renaming.t -> 'head) ->
@@ -170,13 +175,17 @@ end = struct
     | Unknown | Bottom | Ok (No_alias _) -> raise Not_found
     | Ok (Equals alias) -> alias
 
-  let apply_renaming (t : _ t) renaming : _ t =
+  let apply_renaming ~apply_renaming_head ~free_names_head (t : _ t) renaming :
+      _ t =
     match t with
     | Unknown | Bottom -> t
     | Ok descr ->
       let descr' =
-        Descr.apply_renaming ~apply_renaming_head:WDR.apply_renaming descr
-          renaming
+        Descr.apply_renaming
+          ~apply_renaming_head:
+            (WDR.apply_renaming ~apply_renaming_descr:apply_renaming_head
+               ~free_names_descr:free_names_head)
+          descr renaming
       in
       if descr == descr' then t else Ok descr'
 
