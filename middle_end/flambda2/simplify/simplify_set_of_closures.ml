@@ -614,8 +614,15 @@ let simplify_function0 context ~used_closure_vars ~shareable_constants
     UA.lifted_constants uacc_after_upwards_traversal
   in
   let is_a_functor = Code.is_a_functor code in
+  let result_types_enabled =
+    Flambda_features.function_result_types ~is_a_functor
+  in
+  let always_inlined =
+    (* We don't need a result type if we're always going to inline this anyway *)
+    Function_decl_inlining_decision_type.must_be_inlined inlining_decision
+  in
   let result_types =
-    if not (Flambda_features.function_result_types ~is_a_functor)
+    if always_inlined || not result_types_enabled
     then Result_types.create_unknown ~params ~result_arity
     else
       match return_cont_uses with
