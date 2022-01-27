@@ -1461,118 +1461,147 @@ let rec project_variables_out ~to_remove ~expand t =
     let expand_to_head var ~coercion =
       match apply_coercion (expand var) coercion with
       | Value ty -> ty
-      | (Naked_immediate _ | Naked_float _ | Naked_int32 _ | Naked_int64 _ | Naked_nativeint _ | Rec_info _ as ty) ->
-        Misc.fatal_errorf "Wrong kind while expanding %a: expecting [Value], got type %a"
-          Variable.print var
-          print ty
+      | ( Naked_immediate _ | Naked_float _ | Naked_int32 _ | Naked_int64 _
+        | Naked_nativeint _ | Rec_info _ ) as ty ->
+        Misc.fatal_errorf
+          "Wrong kind while expanding %a: expecting [Value], got type %a"
+          Variable.print var print ty
     in
     let ty' =
       TD.project_variables_out
         ~apply_renaming_head:apply_renaming_head_of_kind_value
-        ~free_names_head:free_names_head_of_kind_value
-        ~to_remove ~expand_to_head ~project_head:(project_head_with_sharing project_head_of_kind_value ty) ty
+        ~free_names_head:free_names_head_of_kind_value ~to_remove
+        ~expand_to_head
+        ~project_head:(project_head_with_sharing project_head_of_kind_value ty)
+        ty
     in
     if ty == ty' then t else Value ty'
   | Naked_immediate ty ->
     let expand_to_head var ~coercion =
       match apply_coercion (expand var) coercion with
       | Naked_immediate ty -> ty
-      | (Value _ | Naked_float _ | Naked_int32 _ | Naked_int64 _ | Naked_nativeint _ | Rec_info _ as ty) ->
-        Misc.fatal_errorf "Wrong kind while expanding %a: expecting [Naked_immediate], got type %a"
-          Variable.print var
-          print ty
+      | ( Value _ | Naked_float _ | Naked_int32 _ | Naked_int64 _
+        | Naked_nativeint _ | Rec_info _ ) as ty ->
+        Misc.fatal_errorf
+          "Wrong kind while expanding %a: expecting [Naked_immediate], got \
+           type %a"
+          Variable.print var print ty
     in
     let ty' =
       TD.project_variables_out
         ~apply_renaming_head:apply_renaming_head_of_kind_naked_immediate
-        ~free_names_head:free_names_head_of_kind_naked_immediate
-        ~to_remove ~expand_to_head ~project_head:(project_head_with_sharing project_head_of_kind_naked_immediate ty) ty
+        ~free_names_head:free_names_head_of_kind_naked_immediate ~to_remove
+        ~expand_to_head
+        ~project_head:
+          (project_head_with_sharing project_head_of_kind_naked_immediate ty)
+        ty
     in
     if ty == ty' then t else Naked_immediate ty'
   | Naked_float ty ->
     let expand_to_head var ~coercion =
       match apply_coercion (expand var) coercion with
       | Naked_float ty -> ty
-      | (Value _ | Naked_immediate _ | Naked_int32 _ | Naked_int64 _ | Naked_nativeint _ | Rec_info _ as ty) ->
-        Misc.fatal_errorf "Wrong kind while expanding %a: expecting [Naked_float], got type %a"
-          Variable.print var
-          print ty
+      | ( Value _ | Naked_immediate _ | Naked_int32 _ | Naked_int64 _
+        | Naked_nativeint _ | Rec_info _ ) as ty ->
+        Misc.fatal_errorf
+          "Wrong kind while expanding %a: expecting [Naked_float], got type %a"
+          Variable.print var print ty
     in
     let ty' =
       TD.project_variables_out
         ~apply_renaming_head:apply_renaming_head_of_kind_naked_float
-        ~free_names_head:free_names_head_of_kind_naked_float
-        ~to_remove ~expand_to_head ~project_head:(project_head_with_sharing project_head_of_kind_naked_float ty) ty
+        ~free_names_head:free_names_head_of_kind_naked_float ~to_remove
+        ~expand_to_head
+        ~project_head:
+          (project_head_with_sharing project_head_of_kind_naked_float ty)
+        ty
     in
     if ty == ty' then t else Naked_float ty'
   | Naked_int32 ty ->
     let expand_to_head var ~coercion =
       match apply_coercion (expand var) coercion with
       | Naked_int32 ty -> ty
-      | (Value _ | Naked_immediate _ | Naked_float _ | Naked_int64 _ | Naked_nativeint _ | Rec_info _ as ty) ->
-        Misc.fatal_errorf "Wrong kind while expanding %a: expecting [Naked_int32], got type %a"
-          Variable.print var
-          print ty
+      | ( Value _ | Naked_immediate _ | Naked_float _ | Naked_int64 _
+        | Naked_nativeint _ | Rec_info _ ) as ty ->
+        Misc.fatal_errorf
+          "Wrong kind while expanding %a: expecting [Naked_int32], got type %a"
+          Variable.print var print ty
     in
     let ty' =
       TD.project_variables_out
         ~apply_renaming_head:apply_renaming_head_of_kind_naked_int32
-        ~free_names_head:free_names_head_of_kind_naked_int32
-        ~to_remove ~expand_to_head ~project_head:(project_head_with_sharing project_head_of_kind_naked_int32 ty) ty
+        ~free_names_head:free_names_head_of_kind_naked_int32 ~to_remove
+        ~expand_to_head
+        ~project_head:
+          (project_head_with_sharing project_head_of_kind_naked_int32 ty)
+        ty
     in
     if ty == ty' then t else Naked_int32 ty'
   | Naked_int64 ty ->
     let expand_to_head var ~coercion =
       match apply_coercion (expand var) coercion with
       | Naked_int64 ty -> ty
-      | (Value _ | Naked_immediate _ | Naked_float _ | Naked_int32 _ | Naked_nativeint _ | Rec_info _ as ty) ->
-        Misc.fatal_errorf "Wrong kind while expanding %a: expecting [Naked_int64], got type %a"
-          Variable.print var
-          print ty
+      | ( Value _ | Naked_immediate _ | Naked_float _ | Naked_int32 _
+        | Naked_nativeint _ | Rec_info _ ) as ty ->
+        Misc.fatal_errorf
+          "Wrong kind while expanding %a: expecting [Naked_int64], got type %a"
+          Variable.print var print ty
     in
     let ty' =
       TD.project_variables_out
         ~apply_renaming_head:apply_renaming_head_of_kind_naked_int64
-        ~free_names_head:free_names_head_of_kind_naked_int64
-        ~to_remove ~expand_to_head ~project_head:(project_head_with_sharing project_head_of_kind_naked_int64 ty) ty
+        ~free_names_head:free_names_head_of_kind_naked_int64 ~to_remove
+        ~expand_to_head
+        ~project_head:
+          (project_head_with_sharing project_head_of_kind_naked_int64 ty)
+        ty
     in
     if ty == ty' then t else Naked_int64 ty'
   | Naked_nativeint ty ->
     let expand_to_head var ~coercion =
       match apply_coercion (expand var) coercion with
       | Naked_nativeint ty -> ty
-      | (Value _ | Naked_immediate _ | Naked_float _ | Naked_int32 _ | Naked_int64 _ | Rec_info _ as ty) ->
-        Misc.fatal_errorf "Wrong kind while expanding %a: expecting [Naked_nativeint], got type %a"
-          Variable.print var
-          print ty
+      | ( Value _ | Naked_immediate _ | Naked_float _ | Naked_int32 _
+        | Naked_int64 _ | Rec_info _ ) as ty ->
+        Misc.fatal_errorf
+          "Wrong kind while expanding %a: expecting [Naked_nativeint], got \
+           type %a"
+          Variable.print var print ty
     in
     let ty' =
       TD.project_variables_out
         ~apply_renaming_head:apply_renaming_head_of_kind_naked_nativeint
-        ~free_names_head:free_names_head_of_kind_naked_nativeint
-        ~to_remove ~expand_to_head ~project_head:(project_head_with_sharing project_head_of_kind_naked_nativeint ty) ty
+        ~free_names_head:free_names_head_of_kind_naked_nativeint ~to_remove
+        ~expand_to_head
+        ~project_head:
+          (project_head_with_sharing project_head_of_kind_naked_nativeint ty)
+        ty
     in
     if ty == ty' then t else Naked_nativeint ty'
   | Rec_info ty ->
     let expand_to_head var ~coercion =
       match apply_coercion (expand var) coercion with
       | Rec_info ty -> ty
-      | (Value _ | Naked_immediate _ | Naked_float _ | Naked_int32 _ | Naked_int64 _ | Naked_nativeint _ as ty) ->
-        Misc.fatal_errorf "Wrong kind while expanding %a: expecting [Rec_info], got type %a"
-          Variable.print var
-          print ty
+      | ( Value _ | Naked_immediate _ | Naked_float _ | Naked_int32 _
+        | Naked_int64 _ | Naked_nativeint _ ) as ty ->
+        Misc.fatal_errorf
+          "Wrong kind while expanding %a: expecting [Rec_info], got type %a"
+          Variable.print var print ty
     in
     let ty' =
       TD.project_variables_out
         ~apply_renaming_head:apply_renaming_head_of_kind_rec_info
-        ~free_names_head:free_names_head_of_kind_rec_info
-        ~to_remove ~expand_to_head ~project_head:(project_head_of_kind_rec_info ~to_remove ~expand ~original_ty:ty) ty
+        ~free_names_head:free_names_head_of_kind_rec_info ~to_remove
+        ~expand_to_head
+        ~project_head:
+          (project_head_of_kind_rec_info ~to_remove ~expand ~original_ty:ty)
+        ty
     in
     if ty == ty' then t else Rec_info ty'
 
 and project_head_of_kind_value ~to_remove ~expand head =
   match head with
-  | Variant { blocks; immediates; is_unique; } ->
+  | Variant { blocks; immediates; is_unique } ->
     let immediates' =
       let>+$ immediates = immediates in
       project_variables_out ~to_remove ~expand immediates
@@ -1597,7 +1626,9 @@ and project_head_of_kind_value ~to_remove ~expand head =
     let ty' = project_variables_out ~to_remove ~expand ty in
     if ty == ty' then head else Boxed_nativeint ty'
   | Closures { by_closure_id } ->
-    let by_closure_id' = project_row_like_for_closures ~to_remove ~expand by_closure_id in
+    let by_closure_id' =
+      project_row_like_for_closures ~to_remove ~expand by_closure_id
+    in
     if by_closure_id == by_closure_id'
     then head
     else Closures { by_closure_id = by_closure_id' }
@@ -1627,19 +1658,27 @@ and project_head_of_kind_naked_nativeint ~to_remove:_ ~expand:_ head = head
 and project_head_of_kind_rec_info ~to_remove ~expand ~original_ty head =
   match (head : head_of_kind_rec_info) with
   | Const _ | Succ _ | Unroll_to _ -> original_ty
-  | Var var ->
-    if not (Variable.Set.mem var to_remove) then original_ty
-    else match expand var with
-      | (Value _ | Naked_immediate _ | Naked_float _ | Naked_int32 _ | Naked_int64 _ | Naked_nativeint _) as ty ->
-        Misc.fatal_errorf "During projection, depth variable %a expanded to wrong kinded type %a"
-          Variable.print var
-          print ty
-      | Rec_info ty -> ty
+  | Var var -> (
+    if not (Variable.Set.mem var to_remove)
+    then original_ty
+    else
+      match expand var with
+      | ( Value _ | Naked_immediate _ | Naked_float _ | Naked_int32 _
+        | Naked_int64 _ | Naked_nativeint _ ) as ty ->
+        Misc.fatal_errorf
+          "During projection, depth variable %a expanded to wrong kinded type \
+           %a"
+          Variable.print var print ty
+      | Rec_info ty -> ty)
 
-and project_row_like_for_blocks ~to_remove ~expand ({ known_tags; other_tags } as blocks) =
+and project_row_like_for_blocks ~to_remove ~expand
+    ({ known_tags; other_tags } as blocks) =
   let known_tags' =
-    Tag.Map.map_sharing (fun ({ index; maps_to; env_extension } as case) ->
-        let env_extension' = project_env_extension ~to_remove ~expand env_extension in
+    Tag.Map.map_sharing
+      (fun ({ index; maps_to; env_extension } as case) ->
+        let env_extension' =
+          project_env_extension ~to_remove ~expand env_extension
+        in
         let maps_to' = project_int_indexed_product ~to_remove ~expand maps_to in
         if env_extension == env_extension' && maps_to == maps_to'
         then case
@@ -1650,7 +1689,9 @@ and project_row_like_for_blocks ~to_remove ~expand ({ known_tags; other_tags } a
     match other_tags with
     | Bottom -> Bottom
     | Ok { index; maps_to; env_extension } ->
-      let env_extension' = project_env_extension ~to_remove ~expand env_extension in
+      let env_extension' =
+        project_env_extension ~to_remove ~expand env_extension
+      in
       let maps_to' = project_int_indexed_product ~to_remove ~expand maps_to in
       if env_extension == env_extension' && maps_to == maps_to'
       then other_tags
@@ -1660,10 +1701,14 @@ and project_row_like_for_blocks ~to_remove ~expand ({ known_tags; other_tags } a
   then blocks
   else { known_tags = known_tags'; other_tags = other_tags' }
 
-and project_row_like_for_closures ~to_remove ~expand ({ known_closures; other_closures } as closures) =
+and project_row_like_for_closures ~to_remove ~expand
+    ({ known_closures; other_closures } as closures) =
   let known_closures' =
-    Closure_id.Map.map_sharing (fun ({ index; maps_to; env_extension } as case) ->
-        let env_extension' = project_env_extension ~to_remove ~expand env_extension in
+    Closure_id.Map.map_sharing
+      (fun ({ index; maps_to; env_extension } as case) ->
+        let env_extension' =
+          project_env_extension ~to_remove ~expand env_extension
+        in
         let maps_to' = project_closures_entry ~to_remove ~expand maps_to in
         if env_extension == env_extension' && maps_to == maps_to'
         then case
@@ -1674,7 +1719,9 @@ and project_row_like_for_closures ~to_remove ~expand ({ known_closures; other_cl
     match other_closures with
     | Bottom -> Bottom
     | Ok { index; maps_to; env_extension } ->
-      let env_extension' = project_env_extension ~to_remove ~expand env_extension in
+      let env_extension' =
+        project_env_extension ~to_remove ~expand env_extension
+      in
       let maps_to' = project_closures_entry ~to_remove ~expand maps_to in
       if env_extension == env_extension' && maps_to == maps_to'
       then other_closures
@@ -1684,56 +1731,78 @@ and project_row_like_for_closures ~to_remove ~expand ({ known_closures; other_cl
   then closures
   else { known_closures = known_closures'; other_closures = other_closures' }
 
-and project_closures_entry ~to_remove ~expand ({ function_types; closure_types; closure_var_types } as closures_entry) =
+and project_closures_entry ~to_remove ~expand
+    ({ function_types; closure_types; closure_var_types } as closures_entry) =
   let function_types' =
     Closure_id.Map.map_sharing
       (fun function_type ->
-         Or_unknown_or_bottom.map_sharing function_type ~f:(fun function_type ->
-             project_function_type ~to_remove ~expand function_type))
+        Or_unknown_or_bottom.map_sharing function_type ~f:(fun function_type ->
+            project_function_type ~to_remove ~expand function_type))
       function_types
   in
   let closure_types' =
     project_closure_id_indexed_product ~to_remove ~expand closure_types
   in
   let closure_var_types' =
-    project_var_within_closure_indexed_product ~to_remove ~expand closure_var_types
+    project_var_within_closure_indexed_product ~to_remove ~expand
+      closure_var_types
   in
-  if function_types == function_types' && closure_types == closure_types' && closure_var_types == closure_var_types'
+  if function_types == function_types'
+     && closure_types == closure_types'
+     && closure_var_types == closure_var_types'
   then closures_entry
-  else { function_types = function_types'; closure_types = closure_types'; closure_var_types = closure_var_types' }
+  else
+    { function_types = function_types';
+      closure_types = closure_types';
+      closure_var_types = closure_var_types'
+    }
 
-and project_closure_id_indexed_product ~to_remove ~expand ({ closure_id_components_by_index } as product) =
+and project_closure_id_indexed_product ~to_remove ~expand
+    ({ closure_id_components_by_index } as product) =
   let closure_id_components_by_index' =
-    Closure_id.Map.map_sharing (project_variables_out ~to_remove ~expand) closure_id_components_by_index
+    Closure_id.Map.map_sharing
+      (project_variables_out ~to_remove ~expand)
+      closure_id_components_by_index
   in
   if closure_id_components_by_index == closure_id_components_by_index'
   then product
   else { closure_id_components_by_index = closure_id_components_by_index' }
 
-and project_var_within_closure_indexed_product ~to_remove ~expand ({ var_within_closure_components_by_index } as product) =
+and project_var_within_closure_indexed_product ~to_remove ~expand
+    ({ var_within_closure_components_by_index } as product) =
   let var_within_closure_components_by_index' =
-    Var_within_closure.Map.map_sharing (project_variables_out ~to_remove ~expand) var_within_closure_components_by_index
+    Var_within_closure.Map.map_sharing
+      (project_variables_out ~to_remove ~expand)
+      var_within_closure_components_by_index
   in
-  if var_within_closure_components_by_index == var_within_closure_components_by_index'
+  if var_within_closure_components_by_index
+     == var_within_closure_components_by_index'
   then product
-  else { var_within_closure_components_by_index = var_within_closure_components_by_index' }
+  else
+    { var_within_closure_components_by_index =
+        var_within_closure_components_by_index'
+    }
 
-and project_int_indexed_product ~to_remove ~expand ({ fields; kind } as product) =
+and project_int_indexed_product ~to_remove ~expand ({ fields; kind } as product)
+    =
   let changed = ref false in
   let fields' = Array.copy fields in
   for i = 0 to Array.length fields - 1 do
     let field = fields.(i) in
     let field' = project_variables_out ~to_remove ~expand field in
-    if field != field' then begin
+    if field != field'
+    then begin
       changed := true;
       fields'.(i) <- field'
     end
   done;
   if !changed then { fields = fields'; kind } else product
 
-and project_function_type ~to_remove ~expand ({ code_id; rec_info } as function_type) =
+and project_function_type ~to_remove ~expand
+    ({ code_id; rec_info } as function_type) =
   let rec_info' = project_variables_out ~to_remove ~expand rec_info in
-  if rec_info == rec_info' then function_type
+  if rec_info == rec_info'
+  then function_type
   else { code_id; rec_info = rec_info' }
 
 and project_env_extension ~to_remove ~expand ({ equations } as env_extension) =
@@ -1741,17 +1810,20 @@ and project_env_extension ~to_remove ~expand ({ equations } as env_extension) =
   let equations' =
     Name.Map.fold
       (fun name ty acc ->
-         let keep_equation () =
-           let ty' = project_variables_out ~to_remove ~expand ty in
-           if ty != ty' then changed := true;
-           Name.Map.add name ty' acc
-         in
-         Name.pattern_match name ~symbol:(fun _ -> keep_equation ())
-           ~var:(fun var ->
-               if Variable.Set.mem var to_remove then begin
-                 changed := true;
-                 acc
-               end else keep_equation ()))
+        let keep_equation () =
+          let ty' = project_variables_out ~to_remove ~expand ty in
+          if ty != ty' then changed := true;
+          Name.Map.add name ty' acc
+        in
+        Name.pattern_match name
+          ~symbol:(fun _ -> keep_equation ())
+          ~var:(fun var ->
+            if Variable.Set.mem var to_remove
+            then begin
+              changed := true;
+              acc
+            end
+            else keep_equation ()))
       equations Name.Map.empty
   in
   if !changed then { equations = equations' } else env_extension

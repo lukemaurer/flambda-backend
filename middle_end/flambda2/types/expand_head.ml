@@ -405,29 +405,43 @@ let make_suitable_for_environment env (to_erase : to_erase) bind_to_and_types =
       let unavailable_vars_renamed, unavailable_vars_expanded =
         match to_erase with
         | Everything_not_in suitable_for ->
-          Name_occurrences.fold_variables free_vars ~init:([],[])
-            ~f:(fun (unavailable_vars_renamed, unavailable_vars_expanded as unavailable_vars) var ->
+          Name_occurrences.fold_variables free_vars ~init:([], [])
+            ~f:(fun
+                 ((unavailable_vars_renamed, unavailable_vars_expanded) as
+                 unavailable_vars)
+                 var
+               ->
               if not (TE.mem suitable_for (Name.var var))
-              then match Name_occurrences.count_variable free_vars var with
+              then
+                match Name_occurrences.count_variable free_vars var with
                 | Zero -> unavailable_vars
-                | One -> (unavailable_vars_renamed, var :: unavailable_vars_expanded)
-                | More_than_one -> (var :: unavailable_vars_renamed, unavailable_vars_expanded)
+                | One ->
+                  unavailable_vars_renamed, var :: unavailable_vars_expanded
+                | More_than_one ->
+                  var :: unavailable_vars_renamed, unavailable_vars_expanded
               else unavailable_vars)
         | All_variables_except to_keep ->
-          Name_occurrences.fold_variables free_vars ~init:([],[])
-            ~f:(fun (unavailable_vars_renamed, unavailable_vars_expanded as unavailable_vars) var ->
+          Name_occurrences.fold_variables free_vars ~init:([], [])
+            ~f:(fun
+                 ((unavailable_vars_renamed, unavailable_vars_expanded) as
+                 unavailable_vars)
+                 var
+               ->
               if not (Variable.Set.mem var to_keep)
-              then match Name_occurrences.count_variable free_vars var with
+              then
+                match Name_occurrences.count_variable free_vars var with
                 | Zero -> unavailable_vars
-                | One -> (unavailable_vars_renamed, var :: unavailable_vars_expanded)
-                | More_than_one -> (var :: unavailable_vars_renamed, unavailable_vars_expanded)
+                | One ->
+                  unavailable_vars_renamed, var :: unavailable_vars_expanded
+                | More_than_one ->
+                  var :: unavailable_vars_renamed, unavailable_vars_expanded
               else unavailable_vars)
       in
       (* Fetch the type equation for each free variable. Also add in the
          equations about the "bind-to" names provided to this function. If any
          of the "bind-to" names are already defined in [env], the type given in
-         [bind_to_and_types] takes precedence over such definition.
-         All occurrences of variables that only occur once are expanded directly. *)
+         [bind_to_and_types] takes precedence over such definition. All
+         occurrences of variables that only occur once are expanded directly. *)
       let to_remove = Variable.Set.of_list unavailable_vars_expanded in
       let expand_type ty =
         let rec expand var =
@@ -440,13 +454,15 @@ let make_suitable_for_environment env (to_erase : to_erase) bind_to_and_types =
               ~const:(fun _ -> ty)
               ~symbol:(fun _ ~coercion:_ -> ty)
               ~var:(fun var ~coercion ->
-                  if Variable.Set.mem var to_remove then TG.apply_coercion (expand var) coercion
-                  else ty)
+                if Variable.Set.mem var to_remove
+                then TG.apply_coercion (expand var) coercion
+                else ty)
         in
         TG.project_variables_out ~to_remove ~expand ty
       in
       let equations =
-        ListLabels.fold_left unavailable_vars_renamed ~init:[] ~f:(fun equations var ->
+        ListLabels.fold_left unavailable_vars_renamed ~init:[]
+          ~f:(fun equations var ->
             let name = Name.var var in
             let ty = TE.find env name None in
             (name, expand_type ty) :: equations)
