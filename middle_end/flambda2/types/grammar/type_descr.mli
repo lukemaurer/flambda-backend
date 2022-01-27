@@ -48,11 +48,7 @@ val is_obviously_bottom : _ t -> bool
 
 val is_obviously_unknown : _ t -> bool
 
-val get_alias_exn :
-  apply_renaming_head:('head -> Renaming.t -> 'head) ->
-  free_names_head:('head -> Name_occurrences.t) ->
-  'head t ->
-  Simple.t
+val get_alias_exn : _ t -> Simple.t
 
 val apply_coercion :
   apply_coercion_head:('head -> Coercion.t -> 'head Or_bottom.t) ->
@@ -83,8 +79,8 @@ val project_variables_out :
   apply_renaming_head:('head -> Renaming.t -> 'head) ->
   free_names_head:('head -> Name_occurrences.t) ->
   to_remove:Variable.Set.t ->
-  expand_to_head:(Variable.t -> coercion:Coercion.t -> 'head t) ->
-  project_head:('head -> 'head t) ->
+  expand:(Variable.t -> coercion:Coercion.t -> 'head t) ->
+  project_head:('head -> 'head) ->
   'head t ->
   'head t
 

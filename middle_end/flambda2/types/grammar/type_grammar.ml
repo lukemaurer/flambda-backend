@@ -1452,13 +1452,9 @@ and remove_unused_closure_vars_env_extension ({ equations } as env_extension)
   if !changed then { equations = equations' } else env_extension
 
 let rec project_variables_out ~to_remove ~expand t =
-  let project_head_with_sharing project_head ty head =
-    let head' = project_head ~to_remove ~expand head in
-    if head' == head then ty else TD.create head'
-  in
   match t with
   | Value ty ->
-    let expand_to_head var ~coercion =
+    let expand_with_coercion var ~coercion =
       match apply_coercion (expand var) coercion with
       | Value ty -> ty
       | ( Naked_immediate _ | Naked_float _ | Naked_int32 _ | Naked_int64 _
@@ -1471,13 +1467,13 @@ let rec project_variables_out ~to_remove ~expand t =
       TD.project_variables_out
         ~apply_renaming_head:apply_renaming_head_of_kind_value
         ~free_names_head:free_names_head_of_kind_value ~to_remove
-        ~expand_to_head
-        ~project_head:(project_head_with_sharing project_head_of_kind_value ty)
+        ~expand:expand_with_coercion
+        ~project_head:(project_head_of_kind_value ~to_remove ~expand)
         ty
     in
     if ty == ty' then t else Value ty'
   | Naked_immediate ty ->
-    let expand_to_head var ~coercion =
+    let expand_with_coercion var ~coercion =
       match apply_coercion (expand var) coercion with
       | Naked_immediate ty -> ty
       | ( Value _ | Naked_float _ | Naked_int32 _ | Naked_int64 _
@@ -1491,14 +1487,13 @@ let rec project_variables_out ~to_remove ~expand t =
       TD.project_variables_out
         ~apply_renaming_head:apply_renaming_head_of_kind_naked_immediate
         ~free_names_head:free_names_head_of_kind_naked_immediate ~to_remove
-        ~expand_to_head
-        ~project_head:
-          (project_head_with_sharing project_head_of_kind_naked_immediate ty)
+        ~expand:expand_with_coercion
+        ~project_head:(project_head_of_kind_naked_immediate ~to_remove ~expand)
         ty
     in
     if ty == ty' then t else Naked_immediate ty'
   | Naked_float ty ->
-    let expand_to_head var ~coercion =
+    let expand_with_coercion var ~coercion =
       match apply_coercion (expand var) coercion with
       | Naked_float ty -> ty
       | ( Value _ | Naked_immediate _ | Naked_int32 _ | Naked_int64 _
@@ -1511,14 +1506,14 @@ let rec project_variables_out ~to_remove ~expand t =
       TD.project_variables_out
         ~apply_renaming_head:apply_renaming_head_of_kind_naked_float
         ~free_names_head:free_names_head_of_kind_naked_float ~to_remove
-        ~expand_to_head
+        ~expand:expand_with_coercion
         ~project_head:
-          (project_head_with_sharing project_head_of_kind_naked_float ty)
+          (project_head_of_kind_naked_float ~to_remove ~expand)
         ty
     in
     if ty == ty' then t else Naked_float ty'
   | Naked_int32 ty ->
-    let expand_to_head var ~coercion =
+    let expand_with_coercion var ~coercion =
       match apply_coercion (expand var) coercion with
       | Naked_int32 ty -> ty
       | ( Value _ | Naked_immediate _ | Naked_float _ | Naked_int64 _
@@ -1531,14 +1526,14 @@ let rec project_variables_out ~to_remove ~expand t =
       TD.project_variables_out
         ~apply_renaming_head:apply_renaming_head_of_kind_naked_int32
         ~free_names_head:free_names_head_of_kind_naked_int32 ~to_remove
-        ~expand_to_head
+        ~expand:expand_with_coercion
         ~project_head:
-          (project_head_with_sharing project_head_of_kind_naked_int32 ty)
+          (project_head_of_kind_naked_int32 ~to_remove ~expand)
         ty
     in
     if ty == ty' then t else Naked_int32 ty'
   | Naked_int64 ty ->
-    let expand_to_head var ~coercion =
+    let expand_with_coercion var ~coercion =
       match apply_coercion (expand var) coercion with
       | Naked_int64 ty -> ty
       | ( Value _ | Naked_immediate _ | Naked_float _ | Naked_int32 _
@@ -1551,14 +1546,14 @@ let rec project_variables_out ~to_remove ~expand t =
       TD.project_variables_out
         ~apply_renaming_head:apply_renaming_head_of_kind_naked_int64
         ~free_names_head:free_names_head_of_kind_naked_int64 ~to_remove
-        ~expand_to_head
+        ~expand:expand_with_coercion
         ~project_head:
-          (project_head_with_sharing project_head_of_kind_naked_int64 ty)
+          (project_head_of_kind_naked_int64 ~to_remove ~expand)
         ty
     in
     if ty == ty' then t else Naked_int64 ty'
   | Naked_nativeint ty ->
-    let expand_to_head var ~coercion =
+    let expand_with_coercion var ~coercion =
       match apply_coercion (expand var) coercion with
       | Naked_nativeint ty -> ty
       | ( Value _ | Naked_immediate _ | Naked_float _ | Naked_int32 _
@@ -1572,14 +1567,14 @@ let rec project_variables_out ~to_remove ~expand t =
       TD.project_variables_out
         ~apply_renaming_head:apply_renaming_head_of_kind_naked_nativeint
         ~free_names_head:free_names_head_of_kind_naked_nativeint ~to_remove
-        ~expand_to_head
+        ~expand:expand_with_coercion
         ~project_head:
-          (project_head_with_sharing project_head_of_kind_naked_nativeint ty)
+          (project_head_of_kind_naked_nativeint ~to_remove ~expand)
         ty
     in
     if ty == ty' then t else Naked_nativeint ty'
   | Rec_info ty ->
-    let expand_to_head var ~coercion =
+    let expand_with_coercion var ~coercion =
       match apply_coercion (expand var) coercion with
       | Rec_info ty -> ty
       | ( Value _ | Naked_immediate _ | Naked_float _ | Naked_int32 _
@@ -1592,9 +1587,9 @@ let rec project_variables_out ~to_remove ~expand t =
       TD.project_variables_out
         ~apply_renaming_head:apply_renaming_head_of_kind_rec_info
         ~free_names_head:free_names_head_of_kind_rec_info ~to_remove
-        ~expand_to_head
+        ~expand:expand_with_coercion
         ~project_head:
-          (project_head_of_kind_rec_info ~to_remove ~expand ~original_ty:ty)
+          (project_head_of_kind_rec_info ~to_remove ~expand)
         ty
     in
     if ty == ty' then t else Rec_info ty'
@@ -1655,21 +1650,14 @@ and project_head_of_kind_naked_int64 ~to_remove:_ ~expand:_ head = head
 
 and project_head_of_kind_naked_nativeint ~to_remove:_ ~expand:_ head = head
 
-and project_head_of_kind_rec_info ~to_remove ~expand ~original_ty head =
+and project_head_of_kind_rec_info ~to_remove ~expand:_ head =
   match (head : head_of_kind_rec_info) with
-  | Const _ | Succ _ | Unroll_to _ -> original_ty
-  | Var var -> (
+  | Const _ | Succ _ | Unroll_to _ -> head
+  | Var var ->
     if not (Variable.Set.mem var to_remove)
-    then original_ty
+    then head
     else
-      match expand var with
-      | ( Value _ | Naked_immediate _ | Naked_float _ | Naked_int32 _
-        | Naked_int64 _ | Naked_nativeint _ ) as ty ->
-        Misc.fatal_errorf
-          "During projection, depth variable %a expanded to wrong kinded type \
-           %a"
-          Variable.print var print ty
-      | Rec_info ty -> ty)
+      Misc.fatal_error "Project of depth variables is not implemented"
 
 and project_row_like_for_blocks ~to_remove ~expand
     ({ known_tags; other_tags } as blocks) =
@@ -2298,33 +2286,13 @@ let kind t =
 
 let get_alias_exn t =
   match t with
-  | Value ty ->
-    TD.get_alias_exn ty ~apply_renaming_head:apply_renaming_head_of_kind_value
-      ~free_names_head:free_names_head_of_kind_value
-  | Naked_immediate ty ->
-    TD.get_alias_exn ty
-      ~apply_renaming_head:apply_renaming_head_of_kind_naked_immediate
-      ~free_names_head:free_names_head_of_kind_naked_immediate
-  | Naked_float ty ->
-    TD.get_alias_exn ty
-      ~apply_renaming_head:apply_renaming_head_of_kind_naked_float
-      ~free_names_head:free_names_head_of_kind_naked_float
-  | Naked_int32 ty ->
-    TD.get_alias_exn ty
-      ~apply_renaming_head:apply_renaming_head_of_kind_naked_int32
-      ~free_names_head:free_names_head_of_kind_naked_int32
-  | Naked_int64 ty ->
-    TD.get_alias_exn ty
-      ~apply_renaming_head:apply_renaming_head_of_kind_naked_int64
-      ~free_names_head:free_names_head_of_kind_naked_int64
-  | Naked_nativeint ty ->
-    TD.get_alias_exn ty
-      ~apply_renaming_head:apply_renaming_head_of_kind_naked_nativeint
-      ~free_names_head:free_names_head_of_kind_naked_nativeint
-  | Rec_info ty ->
-    TD.get_alias_exn ty
-      ~apply_renaming_head:apply_renaming_head_of_kind_rec_info
-      ~free_names_head:free_names_head_of_kind_rec_info
+  | Value ty -> TD.get_alias_exn ty
+  | Naked_immediate ty -> TD.get_alias_exn ty
+  | Naked_float ty -> TD.get_alias_exn ty
+  | Naked_int32 ty -> TD.get_alias_exn ty
+  | Naked_int64 ty -> TD.get_alias_exn ty
+  | Naked_nativeint ty -> TD.get_alias_exn ty
+  | Rec_info ty -> TD.get_alias_exn ty
 
 let is_obviously_bottom t =
   match t with

@@ -88,7 +88,7 @@ let remove_unused_closure_vars ~apply_renaming_descr ~free_names_descr
     t
 
 let project_variables_out ~apply_renaming_descr ~free_names_descr ~to_remove
-    ~project_descr t : _ Or_unknown_or_bottom.t =
+    ~project_descr t =
   let free_names = free_names t ~apply_renaming_descr ~free_names_descr in
   let has_variable_to_remove =
     Variable.Set.fold
@@ -96,7 +96,11 @@ let project_variables_out ~apply_renaming_descr ~free_names_descr ~to_remove
         has_variable_to_remove || Name_occurrences.mem_var free_names var)
       to_remove false
   in
-  if has_variable_to_remove then project_descr t.descr else Ok t
+  if has_variable_to_remove
+  then
+    let descr' = project_descr t.descr in
+    if descr' == t.descr then t else create descr'
+  else t
 
 let print ~print_descr ~apply_renaming_descr ~free_names_descr ppf t =
   print_descr ppf (descr ~apply_renaming_descr ~free_names_descr t)
