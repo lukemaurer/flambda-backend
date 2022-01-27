@@ -351,7 +351,7 @@ let free_variables_transitive env already_seen ty =
     then raise Missing_cmx_file
     else
       let to_traverse = Name_occurrences.diff free_vars result in
-      let result = Name_occurrences.union result to_traverse in
+      let result = Name_occurrences.union result free_vars in
       Name_occurrences.fold_names to_traverse ~init:result
         ~f:(fun result name ->
           let ty = TE.find env name None in
@@ -402,43 +402,83 @@ let make_suitable_for_environment env (to_erase : to_erase) bind_to_and_types =
     | free_vars ->
       (* Determine which variables will be unavailable and thus need fresh ones
          assigning to them. *)
-      let unavailable_vars =
+      let unavailable_vars_renamed, unavailable_vars_expanded =
         match to_erase with
         | Everything_not_in suitable_for ->
-          Name_occurrences.fold_variables free_vars ~init:[]
-            ~f:(fun unavailable_vars var ->
+          Name_occurrences.fold_variables free_vars ~init:([], [])
+            ~f:(fun
+                 ((unavailable_vars_renamed, unavailable_vars_expanded) as
+                 unavailable_vars)
+                 var
+               ->
               if not (TE.mem suitable_for (Name.var var))
-              then var :: unavailable_vars
+              then
+                match Name_occurrences.count_variable free_vars var with
+                | Zero -> unavailable_vars
+                | One ->
+                  unavailable_vars_renamed, var :: unavailable_vars_expanded
+                | More_than_one ->
+                  var :: unavailable_vars_renamed, unavailable_vars_expanded
               else unavailable_vars)
         | All_variables_except to_keep ->
-          Name_occurrences.fold_variables free_vars ~init:[]
-            ~f:(fun unavailable_vars var ->
+          Name_occurrences.fold_variables free_vars ~init:([], [])
+            ~f:(fun
+                 ((unavailable_vars_renamed, unavailable_vars_expanded) as
+                 unavailable_vars)
+                 var
+               ->
               if not (Variable.Set.mem var to_keep)
-              then var :: unavailable_vars
+              then
+                match Name_occurrences.count_variable free_vars var with
+                | Zero -> unavailable_vars
+                | One ->
+                  unavailable_vars_renamed, var :: unavailable_vars_expanded
+                | More_than_one ->
+                  var :: unavailable_vars_renamed, unavailable_vars_expanded
               else unavailable_vars)
       in
       (* Fetch the type equation for each free variable. Also add in the
          equations about the "bind-to" names provided to this function. If any
          of the "bind-to" names are already defined in [env], the type given in
-         [bind_to_and_types] takes precedence over such definition. *)
+         [bind_to_and_types] takes precedence over such definition. All
+         occurrences of variables that only occur once are expanded directly. *)
+      let to_remove = Variable.Set.of_list unavailable_vars_expanded in
+      let expand_type ty =
+        let rec expand var =
+          let ty = TE.find env (Name.var var) None in
+          match TG.get_alias_exn ty with
+          | exception Not_found ->
+            TG.project_variables_out ~to_remove ~expand ty
+          | simple ->
+            Simple.pattern_match' simple
+              ~const:(fun _ -> ty)
+              ~symbol:(fun _ ~coercion:_ -> ty)
+              ~var:(fun var ~coercion ->
+                if Variable.Set.mem var to_remove
+                then TG.apply_coercion (expand var) coercion
+                else ty)
+        in
+        TG.project_variables_out ~to_remove ~expand ty
+      in
       let equations =
-        ListLabels.fold_left unavailable_vars ~init:[] ~f:(fun equations var ->
+        ListLabels.fold_left unavailable_vars_renamed ~init:[]
+          ~f:(fun equations var ->
             let name = Name.var var in
             let ty = TE.find env name None in
-            (name, ty) :: equations)
+            (name, expand_type ty) :: equations)
       in
       let equations =
         List.fold_left
           (fun equations (bind_to, ty) ->
             (* The [bind_to] variables are not expected to be unavailable, so
                this shouldn't cause duplicates. *)
-            (bind_to, ty) :: equations)
+            (bind_to, expand_type ty) :: equations)
           equations bind_to_and_types
       in
       (* Make fresh variables for the unavailable variables and form a
          renaming. *)
       let unavailable_to_fresh_vars =
-        List.map (fun var -> var, Variable.rename var) unavailable_vars
+        List.map (fun var -> var, Variable.rename var) unavailable_vars_renamed
         |> Variable.Map.of_list
       in
       let renaming =
@@ -447,32 +487,6 @@ let make_suitable_for_environment env (to_erase : to_erase) bind_to_and_types =
             Renaming.add_fresh_variable renaming unavailable_var
               ~guaranteed_fresh:fresh_var)
           unavailable_to_fresh_vars Renaming.empty
-      in
-      (* For any type equation specifying an alias type, if that alias will be
-         unavailable, then expand the head of the type. Note that this cannot
-         yield any more variables that we haven't seen already, by virtue of the
-         semantics of [free_variables_transitive], above. *)
-      let equations =
-        List.map
-          (fun ((lhs, ty) as equation) ->
-            let ty' =
-              match TG.get_alias_exn ty with
-              | exception Not_found -> ty
-              | alias ->
-                (* Care: the alias may contain a coercion, which could contain a
-                   variable. *)
-                let contains_unavailable_var =
-                  Name_occurrences.fold_variables (Simple.free_names alias)
-                    ~init:false ~f:(fun contains_unavailable_var var ->
-                      contains_unavailable_var
-                      || Variable.Map.mem var unavailable_to_fresh_vars)
-                in
-                if contains_unavailable_var
-                then expand_head env ty |> ET.to_type
-                else ty
-            in
-            if ty == ty' then equation else lhs, ty')
-          equations
       in
       (* Now replace any unavailable variables with their fresh counterparts, on
          both sides of the equations map. At the same time identify which

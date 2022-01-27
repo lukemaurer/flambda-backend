@@ -91,6 +91,15 @@ module T : sig
     used_closure_vars:Var_within_closure.Set.t ->
     canonicalise:(Simple.t -> Simple.t) ->
     'head t
+
+  val project_variables_out :
+    apply_renaming_head:('head -> Renaming.t -> 'head) ->
+    free_names_head:('head -> Name_occurrences.t) ->
+    to_remove:Variable.Set.t ->
+    expand:(Variable.t -> coercion:Coercion.t -> 'head t) ->
+    project_head:('head -> 'head) ->
+    'head t ->
+    'head t
 end = struct
   module Descr = struct
     type 'head t =
@@ -137,6 +146,22 @@ end = struct
       | Equals alias ->
         let canonical = canonicalise alias in
         if alias == canonical then t else Equals canonical
+
+    type ('head, 'descr) project_result = | Not_expanded of 'head t | Expanded of 'descr
+
+    let project_variables_out ~to_remove ~expand ~project_head t =
+      match t with
+      | No_alias head ->
+        let head' = project_head head in
+        if head == head' then Not_expanded t else Not_expanded (No_alias head')
+      | Equals simple ->
+        Simple.pattern_match' simple
+          ~const:(fun _ -> Not_expanded t)
+          ~symbol:(fun _ ~coercion:_ -> Not_expanded t)
+          ~var:(fun var ~coercion ->
+            if Variable.Set.mem var to_remove
+            then Expanded (expand var ~coercion)
+            else Not_expanded t)
   end
 
   module WDR = With_delayed_renaming
@@ -216,6 +241,23 @@ end = struct
           descr ~used_closure_vars ~canonicalise
       in
       if descr == descr' then t else Ok descr'
+
+  let project_variables_out ~apply_renaming_head ~free_names_head ~to_remove
+      ~expand ~project_head (t : _ t) : _ t =
+    match t with
+    | Unknown | Bottom -> t
+    | Ok descr ->
+      let project_head wdr =
+        WDR.project_variables_out ~apply_renaming_descr:apply_renaming_head
+          ~free_names_descr:free_names_head ~to_remove ~project_descr:project_head wdr
+      in
+      match
+        Descr.project_variables_out ~to_remove
+          ~expand ~project_head descr
+      with
+      | Not_expanded descr' ->
+        if descr == descr' then t else Ok descr'
+      | Expanded t' -> t'
 end
 
 include T

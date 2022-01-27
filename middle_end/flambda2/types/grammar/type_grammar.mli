@@ -135,6 +135,9 @@ val remove_unused_closure_vars_and_shortcut_aliases :
   canonicalise:(Simple.t -> Simple.t) ->
   t
 
+val project_variables_out :
+  to_remove:Variable.Set.t -> expand:(Variable.t -> t) -> t -> t
+
 val kind : t -> Flambda_kind.t
 
 val alias_type_of : Flambda_kind.t -> Simple.t -> t

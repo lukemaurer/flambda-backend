@@ -84,6 +84,15 @@ val remove_unused_closure_vars_and_shortcut_aliases :
   canonicalise:(Simple.t -> Simple.t) ->
   'head t
 
+val project_variables_out :
+  apply_renaming_head:('head -> Renaming.t -> 'head) ->
+  free_names_head:('head -> Name_occurrences.t) ->
+  to_remove:Variable.Set.t ->
+  expand:(Variable.t -> coercion:Coercion.t -> 'head t) ->
+  project_head:('head -> 'head) ->
+  'head t ->
+  'head t
+
 val all_ids_for_export :
   apply_renaming_head:('head -> Renaming.t -> 'head) ->
   free_names_head:('head -> Name_occurrences.t) ->
