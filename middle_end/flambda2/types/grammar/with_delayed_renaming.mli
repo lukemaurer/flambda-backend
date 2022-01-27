@@ -63,3 +63,11 @@ val remove_unused_closure_vars :
   'descr t ->
   used_closure_vars:Var_within_closure.Set.t ->
   'descr t
+
+val project_variables_out :
+  apply_renaming_descr:('descr -> Renaming.t -> 'descr) ->
+  free_names_descr:('descr -> Name_occurrences.t) ->
+  to_remove:Variable.Set.t ->
+  project_descr:('descr -> 'descr t Or_unknown_or_bottom.t) ->
+  'descr t ->
+  'descr t Or_unknown_or_bottom.t

@@ -86,6 +86,15 @@ module T : sig
     'head t ->
     used_closure_vars:Var_within_closure.Set.t ->
     'head t
+
+  val project_variables_out :
+    apply_renaming_head:('head -> Renaming.t -> 'head) ->
+    free_names_head:('head -> Name_occurrences.t) ->
+    to_remove:Variable.Set.t ->
+    expand_to_head:(Variable.t -> coercion:Coercion.t -> 'head t) ->
+    project_head:('head -> 'head t) ->
+    'head t ->
+    'head t
 end = struct
   module Descr = struct
     type 'head t =
@@ -126,6 +135,19 @@ end = struct
         let head' = remove_unused_closure_vars_head head ~used_closure_vars in
         if head == head' then t else No_alias head'
       | Equals _ -> t
+
+    let project_variables_out ~to_remove ~expand_to_head ~project_head ~unchanged t =
+      match t with
+      | No_alias head ->
+        project_head head
+      | Equals simple ->
+        Simple.pattern_match' simple
+          ~const:(fun _ -> unchanged)
+          ~symbol:(fun _ ~coercion:_ -> unchanged)
+          ~var:(fun var ~coercion ->
+              if Variable.Set.mem var to_remove then
+                expand_to_head var ~coercion
+              else unchanged)
   end
 
   module WDR = With_delayed_renaming
@@ -207,6 +229,23 @@ end = struct
           wdr ~used_closure_vars
       in
       if wdr == wdr' then t else Ok wdr'
+
+  let project_variables_out ~apply_renaming_head ~free_names_head ~to_remove ~expand_to_head ~project_head (t : _ t) : _ t =
+    match t with
+    | Unknown | Bottom -> t
+    | Ok wdr ->
+      let t' =
+        WDR.project_variables_out
+          ~apply_renaming_descr:(Descr.apply_renaming ~apply_renaming_head)
+          ~free_names_descr:(Descr.free_names ~free_names_head)
+          ~project_descr:(Descr.project_variables_out ~to_remove ~expand_to_head ~project_head ~unchanged:t)
+          ~to_remove wdr
+      in
+      begin match t' with
+        | Ok wdr' ->
+          if wdr == wdr' then t else t'
+        | Unknown | Bottom -> t'
+      end
 end
 
 include T
