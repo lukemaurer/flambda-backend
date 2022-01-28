@@ -55,6 +55,12 @@ val free_names :
   'descr t ->
   Name_occurrences.t
 
+val free_names_no_cache :
+  apply_renaming_descr:('descr -> Renaming.t -> 'descr) ->
+  free_names_descr:('descr -> Name_occurrences.t) ->
+  'descr t ->
+  Name_occurrences.t
+
 val remove_unused_closure_vars :
   apply_renaming_descr:('descr -> Renaming.t -> 'descr) ->
   free_names_descr:('descr -> Name_occurrences.t) ->

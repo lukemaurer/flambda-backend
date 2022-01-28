@@ -58,6 +58,10 @@ let[@inline always] free_names ~apply_renaming_descr ~free_names_descr t =
     t.free_names <- Some free_names;
     free_names
 
+let[@inline always] free_names_no_cache ~apply_renaming_descr ~free_names_descr t =
+  let descr = descr ~apply_renaming_descr ~free_names_descr t in
+  free_names_descr descr
+
 let remove_unused_closure_vars ~apply_renaming_descr ~free_names_descr
     ~remove_unused_closure_vars_descr t ~used_closure_vars =
   let descr_known_to_contain_no_unused_closure_vars =

@@ -66,6 +66,12 @@ val free_names :
   'head t ->
   Name_occurrences.t
 
+val free_names_no_cache :
+  apply_renaming_head:('head -> Renaming.t -> 'head) ->
+  free_names_head:('head -> Name_occurrences.t) ->
+  'head t ->
+  Name_occurrences.t
+
 val remove_unused_closure_vars :
   apply_renaming_head:('head -> Renaming.t -> 'head) ->
   free_names_head:('head -> Name_occurrences.t) ->
