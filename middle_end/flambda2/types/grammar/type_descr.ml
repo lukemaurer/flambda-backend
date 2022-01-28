@@ -95,7 +95,7 @@ module T : sig
   val project_variables_out :
     apply_renaming_head:('head -> Renaming.t -> 'head) ->
     free_names_head:('head -> Name_occurrences.t) ->
-    to_remove:Variable.Set.t ->
+    to_project:Variable.Set.t ->
     expand:(Variable.t -> coercion:Coercion.t -> 'head t) ->
     project_head:('head -> 'head) ->
     'head t ->
@@ -147,9 +147,11 @@ end = struct
         let canonical = canonicalise alias in
         if alias == canonical then t else Equals canonical
 
-    type ('head, 'descr) project_result = | Not_expanded of 'head t | Expanded of 'descr
+    type ('head, 'descr) project_result =
+      | Not_expanded of 'head t
+      | Expanded of 'descr
 
-    let project_variables_out ~to_remove ~expand ~project_head t =
+    let project_variables_out ~to_project ~expand ~project_head t =
       match t with
       | No_alias head ->
         let head' = project_head head in
@@ -159,7 +161,7 @@ end = struct
           ~const:(fun _ -> Not_expanded t)
           ~symbol:(fun _ ~coercion:_ -> Not_expanded t)
           ~var:(fun var ~coercion ->
-            if Variable.Set.mem var to_remove
+            if Variable.Set.mem var to_project
             then Expanded (expand var ~coercion)
             else Not_expanded t)
   end
@@ -242,22 +244,21 @@ end = struct
       in
       if descr == descr' then t else Ok descr'
 
-  let project_variables_out ~apply_renaming_head ~free_names_head ~to_remove
+  let project_variables_out ~apply_renaming_head ~free_names_head ~to_project
       ~expand ~project_head (t : _ t) : _ t =
     match t with
     | Unknown | Bottom -> t
-    | Ok descr ->
+    | Ok descr -> (
       let project_head wdr =
         WDR.project_variables_out ~apply_renaming_descr:apply_renaming_head
-          ~free_names_descr:free_names_head ~to_remove ~project_descr:project_head wdr
+          ~free_names_descr:free_names_head ~to_project
+          ~project_descr:project_head wdr
       in
       match
-        Descr.project_variables_out ~to_remove
-          ~expand ~project_head descr
+        Descr.project_variables_out ~to_project ~expand ~project_head descr
       with
-      | Not_expanded descr' ->
-        if descr == descr' then t else Ok descr'
-      | Expanded t' -> t'
+      | Not_expanded descr' -> if descr == descr' then t else Ok descr'
+      | Expanded t' -> t')
 end
 
 include T

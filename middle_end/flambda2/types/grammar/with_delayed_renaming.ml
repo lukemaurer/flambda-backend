@@ -93,16 +93,16 @@ let remove_unused_closure_vars_and_shortcut_aliases ~apply_renaming_descr
     t.free_names <- None;
     t
 
-let project_variables_out ~apply_renaming_descr ~free_names_descr ~to_remove
+let project_variables_out ~apply_renaming_descr ~free_names_descr ~to_project
     ~project_descr t =
   let free_names = free_names t ~apply_renaming_descr ~free_names_descr in
-  let has_variable_to_remove =
+  let has_variable_to_project =
     Variable.Set.fold
-      (fun var has_variable_to_remove ->
-        has_variable_to_remove || Name_occurrences.mem_var free_names var)
-      to_remove false
+      (fun var has_variable_to_project ->
+        has_variable_to_project || Name_occurrences.mem_var free_names var)
+      to_project false
   in
-  if has_variable_to_remove
+  if has_variable_to_project
   then
     let descr' = project_descr t.descr in
     if descr' == t.descr then t else create descr'

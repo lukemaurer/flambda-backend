@@ -76,7 +76,7 @@ val remove_unused_closure_vars_and_shortcut_aliases :
 val project_variables_out :
   apply_renaming_descr:('descr -> Renaming.t -> 'descr) ->
   free_names_descr:('descr -> Name_occurrences.t) ->
-  to_remove:Variable.Set.t ->
+  to_project:Variable.Set.t ->
   project_descr:('descr -> 'descr) ->
   'descr t ->
   'descr t
