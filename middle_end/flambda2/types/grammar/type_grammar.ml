@@ -361,15 +361,15 @@ and apply_renaming_env_extension ({ equations } as env_extension) renaming =
   in
   if !changed then { equations = equations' } else env_extension
 
-let rec free_names t =
+let rec free_names ~follow_closure_vars t =
   match t with
   | Value ty ->
     TD.free_names ~apply_renaming_head:apply_renaming_head_of_kind_value
-      ~free_names_head:free_names_head_of_kind_value ty
+      ~free_names_head:(free_names_head_of_kind_value ~follow_closure_vars) ty
   | Naked_immediate ty ->
     TD.free_names
       ~apply_renaming_head:apply_renaming_head_of_kind_naked_immediate
-      ~free_names_head:free_names_head_of_kind_naked_immediate ty
+      ~free_names_head:(free_names_head_of_kind_naked_immediate ~follow_closure_vars) ty
   | Naked_float ty ->
     TD.free_names ~apply_renaming_head:apply_renaming_head_of_kind_naked_float
       ~free_names_head:free_names_head_of_kind_naked_float ty
@@ -387,24 +387,24 @@ let rec free_names t =
     TD.free_names ~apply_renaming_head:Rec_info_expr.apply_renaming
       ~free_names_head:free_names_head_of_kind_rec_info ty
 
-and free_names_head_of_kind_value head =
+and free_names_head_of_kind_value ~follow_closure_vars head =
   match head with
   | Variant { blocks; immediates; is_unique = _ } ->
     Name_occurrences.union
-      (Or_unknown.free_names free_names_row_like_for_blocks blocks)
-      (Or_unknown.free_names free_names immediates)
-  | Boxed_float ty -> free_names ty
-  | Boxed_int32 ty -> free_names ty
-  | Boxed_int64 ty -> free_names ty
-  | Boxed_nativeint ty -> free_names ty
-  | Closures { by_closure_id } -> free_names_row_like_for_closures by_closure_id
+      (Or_unknown.free_names (free_names_row_like_for_blocks ~follow_closure_vars) blocks)
+      (Or_unknown.free_names (free_names ~follow_closure_vars) immediates)
+  | Boxed_float ty -> free_names ~follow_closure_vars ty
+  | Boxed_int32 ty -> free_names ~follow_closure_vars ty
+  | Boxed_int64 ty -> free_names ~follow_closure_vars ty
+  | Boxed_nativeint ty -> free_names ~follow_closure_vars ty
+  | Closures { by_closure_id } -> free_names_row_like_for_closures ~follow_closure_vars by_closure_id
   | String _ -> Name_occurrences.empty
-  | Array { element_kind = _; length } -> free_names length
+  | Array { element_kind = _; length } -> free_names ~follow_closure_vars length
 
-and free_names_head_of_kind_naked_immediate head =
+and free_names_head_of_kind_naked_immediate ~follow_closure_vars head =
   match head with
   | Naked_immediates _ -> Name_occurrences.empty
-  | Is_int ty | Get_tag ty -> free_names ty
+  | Is_int ty | Get_tag ty -> free_names ~follow_closure_vars ty
 
 and free_names_head_of_kind_naked_float _ = Name_occurrences.empty
 
@@ -420,7 +420,8 @@ and free_names_head_of_kind_rec_info head =
 and free_names_row_like :
       'row_tag 'index 'maps_to 'known.
       free_names_index:('index -> Name_occurrences.t) ->
-      free_names_maps_to:('maps_to -> Name_occurrences.t) ->
+      free_names_maps_to:(follow_closure_vars:bool -> 'maps_to -> Name_occurrences.t) ->
+      follow_closure_vars:bool ->
       known:'known ->
       other:('index, 'maps_to) row_like_case Or_bottom.t ->
       fold_known:
@@ -429,7 +430,7 @@ and free_names_row_like :
         'acc ->
         'acc) ->
       Name_occurrences.t =
- fun ~free_names_index ~free_names_maps_to ~known ~other ~fold_known ->
+ fun ~free_names_index ~free_names_maps_to ~follow_closure_vars ~known ~other ~fold_known ->
   let[@inline always] free_names_index index =
     match index with Known index | At_least index -> free_names_index index
   in
@@ -439,8 +440,8 @@ and free_names_row_like :
         Name_occurrences.union
           (Name_occurrences.union free_names (free_names_index index))
           (Name_occurrences.union
-             (free_names_env_extension env_extension)
-             (free_names_maps_to maps_to)))
+             (free_names_env_extension ~follow_closure_vars env_extension)
+             (free_names_maps_to ~follow_closure_vars maps_to)))
       known Name_occurrences.empty
   in
   match other with
@@ -448,68 +449,87 @@ and free_names_row_like :
   | Ok { maps_to; env_extension; index } ->
     Name_occurrences.union
       (Name_occurrences.union (free_names_index index)
-         (free_names_maps_to maps_to))
+         (free_names_maps_to ~follow_closure_vars maps_to))
       (Name_occurrences.union from_known
-         (free_names_env_extension env_extension))
+         (free_names_env_extension ~follow_closure_vars env_extension))
 
-and free_names_row_like_for_blocks { known_tags; other_tags } =
+and free_names_row_like_for_blocks ~follow_closure_vars { known_tags; other_tags } =
   free_names_row_like
     ~free_names_index:(fun _block_size -> Name_occurrences.empty)
-    ~free_names_maps_to:free_names_int_indexed_product ~known:known_tags
+    ~free_names_maps_to:free_names_int_indexed_product ~follow_closure_vars ~known:known_tags
     ~other:other_tags ~fold_known:Tag.Map.fold
 
-and free_names_row_like_for_closures { known_closures; other_closures } =
+and free_names_row_like_for_closures ~follow_closure_vars { known_closures; other_closures } =
   free_names_row_like ~free_names_index:Set_of_closures_contents.free_names
-    ~free_names_maps_to:free_names_closures_entry ~known:known_closures
+    ~free_names_maps_to:free_names_closures_entry ~follow_closure_vars ~known:known_closures
     ~other:other_closures ~fold_known:Closure_id.Map.fold
 
-and free_names_closures_entry
+and free_names_closures_entry ~follow_closure_vars
     { function_types; closure_types; closure_var_types } =
   let function_types_free_names =
     Closure_id.Map.fold
       (fun _closure_id function_decl free_names ->
         Name_occurrences.union free_names
-          (free_names_function_type function_decl))
+          (free_names_function_type ~follow_closure_vars function_decl))
       function_types Name_occurrences.empty
   in
+  let closure_elements_free_names =
+    if follow_closure_vars
+    then
+      Name_occurrences.union
+        (free_names_closure_id_indexed_product ~follow_closure_vars closure_types)
+        (free_names_var_within_closure_indexed_product ~follow_closure_vars closure_var_types)
+    else
+      free_names_closure_id_indexed_product ~follow_closure_vars closure_types
+  in
   Name_occurrences.union function_types_free_names
-    (Name_occurrences.union
-       (free_names_closure_id_indexed_product closure_types)
-       (free_names_var_within_closure_indexed_product closure_var_types))
+    closure_elements_free_names
 
-and free_names_closure_id_indexed_product { closure_id_components_by_index } =
+and free_names_closure_id_indexed_product ~follow_closure_vars { closure_id_components_by_index } =
   Closure_id.Map.fold
     (fun _ t free_names_acc ->
-      Name_occurrences.union (free_names t) free_names_acc)
+      Name_occurrences.union (free_names ~follow_closure_vars t) free_names_acc)
     closure_id_components_by_index Name_occurrences.empty
 
-and free_names_var_within_closure_indexed_product
+and free_names_var_within_closure_indexed_product ~follow_closure_vars
     { var_within_closure_components_by_index } =
   Var_within_closure.Map.fold
     (fun closure_var t free_names_acc ->
       Name_occurrences.add_closure_var
-        (Name_occurrences.union (free_names t) free_names_acc)
+        (Name_occurrences.union (free_names ~follow_closure_vars t) free_names_acc)
         closure_var Name_mode.normal)
     var_within_closure_components_by_index Name_occurrences.empty
 
-and free_names_int_indexed_product { fields; kind = _ } =
+and free_names_int_indexed_product ~follow_closure_vars { fields; kind = _ } =
   Array.fold_left
     (fun free_names_acc t ->
-      Name_occurrences.union (free_names t) free_names_acc)
+      Name_occurrences.union (free_names ~follow_closure_vars t) free_names_acc)
     Name_occurrences.empty fields
 
-and free_names_function_type (function_type : _ Or_unknown_or_bottom.t) =
+and free_names_function_type ~follow_closure_vars (function_type : _ Or_unknown_or_bottom.t) =
   match function_type with
   | Bottom | Unknown -> Name_occurrences.empty
   | Ok { code_id; rec_info } ->
-    Name_occurrences.add_code_id (free_names rec_info) code_id Name_mode.normal
+    Name_occurrences.add_code_id (free_names ~follow_closure_vars rec_info) code_id Name_mode.normal
 
-and free_names_env_extension { equations } =
+and free_names_env_extension ~follow_closure_vars { equations } =
   Name.Map.fold
     (fun name t acc ->
-      let acc = Name_occurrences.union acc (free_names t) in
+      let acc = Name_occurrences.union acc (free_names ~follow_closure_vars t) in
       Name_occurrences.add_name acc name Name_mode.in_types)
     equations Name_occurrences.empty
+
+let free_names_except_through_closure_vars t =
+  free_names ~follow_closure_vars:false t
+
+let free_names t =
+  free_names ~follow_closure_vars:true t
+
+let free_names_head_of_kind_value t =
+  free_names_head_of_kind_value ~follow_closure_vars:true t
+
+let free_names_head_of_kind_naked_immediate t =
+  free_names_head_of_kind_naked_immediate ~follow_closure_vars:true t
 
 let rec print ppf t =
   let no_renaming thing _ = thing in
@@ -1451,7 +1471,7 @@ and remove_unused_closure_vars_env_extension ({ equations } as env_extension)
   in
   if !changed then { equations = equations' } else env_extension
 
-let rec project_variables_out ~to_remove ~expand t =
+let rec project_variables_out ~to_project ~expand t =
   match t with
   | Value ty ->
     let expand_with_coercion var ~coercion =
@@ -1466,9 +1486,9 @@ let rec project_variables_out ~to_remove ~expand t =
     let ty' =
       TD.project_variables_out
         ~apply_renaming_head:apply_renaming_head_of_kind_value
-        ~free_names_head:free_names_head_of_kind_value ~to_remove
+        ~free_names_head:free_names_head_of_kind_value ~to_project
         ~expand:expand_with_coercion
-        ~project_head:(project_head_of_kind_value ~to_remove ~expand)
+        ~project_head:(project_head_of_kind_value ~to_project ~expand)
         ty
     in
     if ty == ty' then t else Value ty'
@@ -1486,9 +1506,9 @@ let rec project_variables_out ~to_remove ~expand t =
     let ty' =
       TD.project_variables_out
         ~apply_renaming_head:apply_renaming_head_of_kind_naked_immediate
-        ~free_names_head:free_names_head_of_kind_naked_immediate ~to_remove
+        ~free_names_head:free_names_head_of_kind_naked_immediate ~to_project
         ~expand:expand_with_coercion
-        ~project_head:(project_head_of_kind_naked_immediate ~to_remove ~expand)
+        ~project_head:(project_head_of_kind_naked_immediate ~to_project ~expand)
         ty
     in
     if ty == ty' then t else Naked_immediate ty'
@@ -1505,10 +1525,10 @@ let rec project_variables_out ~to_remove ~expand t =
     let ty' =
       TD.project_variables_out
         ~apply_renaming_head:apply_renaming_head_of_kind_naked_float
-        ~free_names_head:free_names_head_of_kind_naked_float ~to_remove
+        ~free_names_head:free_names_head_of_kind_naked_float ~to_project
         ~expand:expand_with_coercion
         ~project_head:
-          (project_head_of_kind_naked_float ~to_remove ~expand)
+          (project_head_of_kind_naked_float ~to_project ~expand)
         ty
     in
     if ty == ty' then t else Naked_float ty'
@@ -1525,10 +1545,10 @@ let rec project_variables_out ~to_remove ~expand t =
     let ty' =
       TD.project_variables_out
         ~apply_renaming_head:apply_renaming_head_of_kind_naked_int32
-        ~free_names_head:free_names_head_of_kind_naked_int32 ~to_remove
+        ~free_names_head:free_names_head_of_kind_naked_int32 ~to_project
         ~expand:expand_with_coercion
         ~project_head:
-          (project_head_of_kind_naked_int32 ~to_remove ~expand)
+          (project_head_of_kind_naked_int32 ~to_project ~expand)
         ty
     in
     if ty == ty' then t else Naked_int32 ty'
@@ -1545,10 +1565,10 @@ let rec project_variables_out ~to_remove ~expand t =
     let ty' =
       TD.project_variables_out
         ~apply_renaming_head:apply_renaming_head_of_kind_naked_int64
-        ~free_names_head:free_names_head_of_kind_naked_int64 ~to_remove
+        ~free_names_head:free_names_head_of_kind_naked_int64 ~to_project
         ~expand:expand_with_coercion
         ~project_head:
-          (project_head_of_kind_naked_int64 ~to_remove ~expand)
+          (project_head_of_kind_naked_int64 ~to_project ~expand)
         ty
     in
     if ty == ty' then t else Naked_int64 ty'
@@ -1566,10 +1586,10 @@ let rec project_variables_out ~to_remove ~expand t =
     let ty' =
       TD.project_variables_out
         ~apply_renaming_head:apply_renaming_head_of_kind_naked_nativeint
-        ~free_names_head:free_names_head_of_kind_naked_nativeint ~to_remove
+        ~free_names_head:free_names_head_of_kind_naked_nativeint ~to_project
         ~expand:expand_with_coercion
         ~project_head:
-          (project_head_of_kind_naked_nativeint ~to_remove ~expand)
+          (project_head_of_kind_naked_nativeint ~to_project ~expand)
         ty
     in
     if ty == ty' then t else Naked_nativeint ty'
@@ -1586,88 +1606,88 @@ let rec project_variables_out ~to_remove ~expand t =
     let ty' =
       TD.project_variables_out
         ~apply_renaming_head:apply_renaming_head_of_kind_rec_info
-        ~free_names_head:free_names_head_of_kind_rec_info ~to_remove
+        ~free_names_head:free_names_head_of_kind_rec_info ~to_project
         ~expand:expand_with_coercion
         ~project_head:
-          (project_head_of_kind_rec_info ~to_remove ~expand)
+          (project_head_of_kind_rec_info ~to_project ~expand)
         ty
     in
     if ty == ty' then t else Rec_info ty'
 
-and project_head_of_kind_value ~to_remove ~expand head =
+and project_head_of_kind_value ~to_project ~expand head =
   match head with
   | Variant { blocks; immediates; is_unique } ->
     let immediates' =
       let>+$ immediates = immediates in
-      project_variables_out ~to_remove ~expand immediates
+      project_variables_out ~to_project ~expand immediates
     in
     let blocks' =
       let>+$ blocks = blocks in
-      project_row_like_for_blocks ~to_remove ~expand blocks
+      project_row_like_for_blocks ~to_project ~expand blocks
     in
     if immediates == immediates' && blocks == blocks'
     then head
     else Variant { is_unique; blocks = blocks'; immediates = immediates' }
   | Boxed_float ty ->
-    let ty' = project_variables_out ~to_remove ~expand ty in
+    let ty' = project_variables_out ~to_project ~expand ty in
     if ty == ty' then head else Boxed_float ty'
   | Boxed_int32 ty ->
-    let ty' = project_variables_out ~to_remove ~expand ty in
+    let ty' = project_variables_out ~to_project ~expand ty in
     if ty == ty' then head else Boxed_int32 ty'
   | Boxed_int64 ty ->
-    let ty' = project_variables_out ~to_remove ~expand ty in
+    let ty' = project_variables_out ~to_project ~expand ty in
     if ty == ty' then head else Boxed_int64 ty'
   | Boxed_nativeint ty ->
-    let ty' = project_variables_out ~to_remove ~expand ty in
+    let ty' = project_variables_out ~to_project ~expand ty in
     if ty == ty' then head else Boxed_nativeint ty'
   | Closures { by_closure_id } ->
     let by_closure_id' =
-      project_row_like_for_closures ~to_remove ~expand by_closure_id
+      project_row_like_for_closures ~to_project ~expand by_closure_id
     in
     if by_closure_id == by_closure_id'
     then head
     else Closures { by_closure_id = by_closure_id' }
   | String _ -> head
   | Array { element_kind; length } ->
-    let length' = project_variables_out ~to_remove ~expand length in
+    let length' = project_variables_out ~to_project ~expand length in
     if length == length' then head else Array { element_kind; length = length' }
 
-and project_head_of_kind_naked_immediate ~to_remove ~expand head =
+and project_head_of_kind_naked_immediate ~to_project ~expand head =
   match head with
   | Naked_immediates _ -> head
   | Is_int ty ->
-    let ty' = project_variables_out ~to_remove ~expand ty in
+    let ty' = project_variables_out ~to_project ~expand ty in
     if ty == ty' then head else Is_int ty'
   | Get_tag ty ->
-    let ty' = project_variables_out ~to_remove ~expand ty in
+    let ty' = project_variables_out ~to_project ~expand ty in
     if ty == ty' then head else Get_tag ty'
 
-and project_head_of_kind_naked_float ~to_remove:_ ~expand:_ head = head
+and project_head_of_kind_naked_float ~to_project:_ ~expand:_ head = head
 
-and project_head_of_kind_naked_int32 ~to_remove:_ ~expand:_ head = head
+and project_head_of_kind_naked_int32 ~to_project:_ ~expand:_ head = head
 
-and project_head_of_kind_naked_int64 ~to_remove:_ ~expand:_ head = head
+and project_head_of_kind_naked_int64 ~to_project:_ ~expand:_ head = head
 
-and project_head_of_kind_naked_nativeint ~to_remove:_ ~expand:_ head = head
+and project_head_of_kind_naked_nativeint ~to_project:_ ~expand:_ head = head
 
-and project_head_of_kind_rec_info ~to_remove ~expand:_ head =
+and project_head_of_kind_rec_info ~to_project ~expand:_ head =
   match (head : head_of_kind_rec_info) with
   | Const _ | Succ _ | Unroll_to _ -> head
   | Var var ->
-    if not (Variable.Set.mem var to_remove)
+    if not (Variable.Set.mem var to_project)
     then head
     else
       Misc.fatal_error "Project of depth variables is not implemented"
 
-and project_row_like_for_blocks ~to_remove ~expand
+and project_row_like_for_blocks ~to_project ~expand
     ({ known_tags; other_tags } as blocks) =
   let known_tags' =
     Tag.Map.map_sharing
       (fun ({ index; maps_to; env_extension } as case) ->
         let env_extension' =
-          project_env_extension ~to_remove ~expand env_extension
+          project_env_extension ~to_project ~expand env_extension
         in
-        let maps_to' = project_int_indexed_product ~to_remove ~expand maps_to in
+        let maps_to' = project_int_indexed_product ~to_project ~expand maps_to in
         if env_extension == env_extension' && maps_to == maps_to'
         then case
         else { index; env_extension = env_extension'; maps_to = maps_to' })
@@ -1678,9 +1698,9 @@ and project_row_like_for_blocks ~to_remove ~expand
     | Bottom -> Bottom
     | Ok { index; maps_to; env_extension } ->
       let env_extension' =
-        project_env_extension ~to_remove ~expand env_extension
+        project_env_extension ~to_project ~expand env_extension
       in
-      let maps_to' = project_int_indexed_product ~to_remove ~expand maps_to in
+      let maps_to' = project_int_indexed_product ~to_project ~expand maps_to in
       if env_extension == env_extension' && maps_to == maps_to'
       then other_tags
       else Ok { index; env_extension = env_extension'; maps_to = maps_to' }
@@ -1689,15 +1709,15 @@ and project_row_like_for_blocks ~to_remove ~expand
   then blocks
   else { known_tags = known_tags'; other_tags = other_tags' }
 
-and project_row_like_for_closures ~to_remove ~expand
+and project_row_like_for_closures ~to_project ~expand
     ({ known_closures; other_closures } as closures) =
   let known_closures' =
     Closure_id.Map.map_sharing
       (fun ({ index; maps_to; env_extension } as case) ->
         let env_extension' =
-          project_env_extension ~to_remove ~expand env_extension
+          project_env_extension ~to_project ~expand env_extension
         in
-        let maps_to' = project_closures_entry ~to_remove ~expand maps_to in
+        let maps_to' = project_closures_entry ~to_project ~expand maps_to in
         if env_extension == env_extension' && maps_to == maps_to'
         then case
         else { index; env_extension = env_extension'; maps_to = maps_to' })
@@ -1708,9 +1728,9 @@ and project_row_like_for_closures ~to_remove ~expand
     | Bottom -> Bottom
     | Ok { index; maps_to; env_extension } ->
       let env_extension' =
-        project_env_extension ~to_remove ~expand env_extension
+        project_env_extension ~to_project ~expand env_extension
       in
-      let maps_to' = project_closures_entry ~to_remove ~expand maps_to in
+      let maps_to' = project_closures_entry ~to_project ~expand maps_to in
       if env_extension == env_extension' && maps_to == maps_to'
       then other_closures
       else Ok { index; env_extension = env_extension'; maps_to = maps_to' }
@@ -1719,20 +1739,20 @@ and project_row_like_for_closures ~to_remove ~expand
   then closures
   else { known_closures = known_closures'; other_closures = other_closures' }
 
-and project_closures_entry ~to_remove ~expand
+and project_closures_entry ~to_project ~expand
     ({ function_types; closure_types; closure_var_types } as closures_entry) =
   let function_types' =
     Closure_id.Map.map_sharing
       (fun function_type ->
         Or_unknown_or_bottom.map_sharing function_type ~f:(fun function_type ->
-            project_function_type ~to_remove ~expand function_type))
+            project_function_type ~to_project ~expand function_type))
       function_types
   in
   let closure_types' =
-    project_closure_id_indexed_product ~to_remove ~expand closure_types
+    project_closure_id_indexed_product ~to_project ~expand closure_types
   in
   let closure_var_types' =
-    project_var_within_closure_indexed_product ~to_remove ~expand
+    project_var_within_closure_indexed_product ~to_project ~expand
       closure_var_types
   in
   if function_types == function_types'
@@ -1745,22 +1765,22 @@ and project_closures_entry ~to_remove ~expand
       closure_var_types = closure_var_types'
     }
 
-and project_closure_id_indexed_product ~to_remove ~expand
+and project_closure_id_indexed_product ~to_project ~expand
     ({ closure_id_components_by_index } as product) =
   let closure_id_components_by_index' =
     Closure_id.Map.map_sharing
-      (project_variables_out ~to_remove ~expand)
+      (project_variables_out ~to_project ~expand)
       closure_id_components_by_index
   in
   if closure_id_components_by_index == closure_id_components_by_index'
   then product
   else { closure_id_components_by_index = closure_id_components_by_index' }
 
-and project_var_within_closure_indexed_product ~to_remove ~expand
+and project_var_within_closure_indexed_product ~to_project ~expand
     ({ var_within_closure_components_by_index } as product) =
   let var_within_closure_components_by_index' =
     Var_within_closure.Map.map_sharing
-      (project_variables_out ~to_remove ~expand)
+      (project_variables_out ~to_project ~expand)
       var_within_closure_components_by_index
   in
   if var_within_closure_components_by_index
@@ -1771,13 +1791,13 @@ and project_var_within_closure_indexed_product ~to_remove ~expand
         var_within_closure_components_by_index'
     }
 
-and project_int_indexed_product ~to_remove ~expand ({ fields; kind } as product)
+and project_int_indexed_product ~to_project ~expand ({ fields; kind } as product)
     =
   let changed = ref false in
   let fields' = Array.copy fields in
   for i = 0 to Array.length fields - 1 do
     let field = fields.(i) in
-    let field' = project_variables_out ~to_remove ~expand field in
+    let field' = project_variables_out ~to_project ~expand field in
     if field != field'
     then begin
       changed := true;
@@ -1786,27 +1806,27 @@ and project_int_indexed_product ~to_remove ~expand ({ fields; kind } as product)
   done;
   if !changed then { fields = fields'; kind } else product
 
-and project_function_type ~to_remove ~expand
+and project_function_type ~to_project ~expand
     ({ code_id; rec_info } as function_type) =
-  let rec_info' = project_variables_out ~to_remove ~expand rec_info in
+  let rec_info' = project_variables_out ~to_project ~expand rec_info in
   if rec_info == rec_info'
   then function_type
   else { code_id; rec_info = rec_info' }
 
-and project_env_extension ~to_remove ~expand ({ equations } as env_extension) =
+and project_env_extension ~to_project ~expand ({ equations } as env_extension) =
   let changed = ref false in
   let equations' =
     Name.Map.fold
       (fun name ty acc ->
         let keep_equation () =
-          let ty' = project_variables_out ~to_remove ~expand ty in
+          let ty' = project_variables_out ~to_project ~expand ty in
           if ty != ty' then changed := true;
           Name.Map.add name ty' acc
         in
         Name.pattern_match name
           ~symbol:(fun _ -> keep_equation ())
           ~var:(fun var ->
-            if Variable.Set.mem var to_remove
+            if Variable.Set.mem var to_project
             then begin
               changed := true;
               acc
@@ -2267,7 +2287,7 @@ module Env_extension = struct
 
   let apply_renaming = apply_renaming_env_extension
 
-  let free_names = free_names_env_extension
+  let free_names = free_names_env_extension ~follow_closure_vars:true
 
   let print = print_env_extension
 

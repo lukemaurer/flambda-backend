@@ -127,13 +127,15 @@ val print : Format.formatter -> t -> unit
     regardless of where in the type such variables occur. *)
 include Contains_names.S with type t := t
 
+val free_names_except_through_closure_vars : t -> Name_occurrences.t
+
 include Contains_ids.S with type t := t
 
 val remove_unused_closure_vars :
   t -> used_closure_vars:Var_within_closure.Set.t -> t
 
 val project_variables_out :
-  to_remove:Variable.Set.t -> expand:(Variable.t -> t) -> t -> t
+  to_project:Variable.Set.t -> expand:(Variable.t -> t) -> t -> t
 
 val kind : t -> Flambda_kind.t
 
