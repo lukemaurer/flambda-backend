@@ -52,6 +52,11 @@ let[@inline always] free_names ~apply_renaming_descr ~free_names_descr t =
     t.free_names <- Some free_names;
     free_names
 
+let[@inline always] free_names_no_cache ~apply_renaming_descr ~free_names_descr
+    t =
+  let descr = descr ~apply_renaming_descr ~free_names_descr t in
+  free_names_descr descr
+
 let apply_renaming ~apply_renaming_descr ~free_names_descr t perm =
   let free_names = free_names ~apply_renaming_descr ~free_names_descr t in
   if (not (Renaming.has_import_map perm))

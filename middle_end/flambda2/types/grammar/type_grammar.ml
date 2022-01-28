@@ -389,32 +389,40 @@ and apply_renaming_env_extension ({ equations } as env_extension) renaming =
   if !changed then { equations = equations' } else env_extension
 
 and free_names0 ~follow_closure_vars t =
+  let[@inline] type_descr_free_names ~apply_renaming_head ~free_names_head ty =
+    if follow_closure_vars
+    then TD.free_names ~apply_renaming_head ~free_names_head ty
+    else TD.free_names_no_cache ~apply_renaming_head ~free_names_head ty
+  in
   match t with
   | Value ty ->
-    TD.free_names ~apply_renaming_head:apply_renaming_head_of_kind_value
+    type_descr_free_names ~apply_renaming_head:apply_renaming_head_of_kind_value
       ~free_names_head:(free_names_head_of_kind_value0 ~follow_closure_vars)
       ty
   | Naked_immediate ty ->
-    TD.free_names
+    type_descr_free_names
       ~apply_renaming_head:apply_renaming_head_of_kind_naked_immediate
       ~free_names_head:
         (free_names_head_of_kind_naked_immediate0 ~follow_closure_vars)
       ty
   | Naked_float ty ->
-    TD.free_names ~apply_renaming_head:apply_renaming_head_of_kind_naked_float
+    type_descr_free_names
+      ~apply_renaming_head:apply_renaming_head_of_kind_naked_float
       ~free_names_head:free_names_head_of_kind_naked_float ty
   | Naked_int32 ty ->
-    TD.free_names ~apply_renaming_head:apply_renaming_head_of_kind_naked_int32
+    type_descr_free_names
+      ~apply_renaming_head:apply_renaming_head_of_kind_naked_int32
       ~free_names_head:free_names_head_of_kind_naked_int32 ty
   | Naked_int64 ty ->
-    TD.free_names ~apply_renaming_head:apply_renaming_head_of_kind_naked_int64
+    type_descr_free_names
+      ~apply_renaming_head:apply_renaming_head_of_kind_naked_int64
       ~free_names_head:free_names_head_of_kind_naked_int64 ty
   | Naked_nativeint ty ->
-    TD.free_names
+    type_descr_free_names
       ~apply_renaming_head:apply_renaming_head_of_kind_naked_nativeint
       ~free_names_head:free_names_head_of_kind_naked_nativeint ty
   | Rec_info ty ->
-    TD.free_names ~apply_renaming_head:Rec_info_expr.apply_renaming
+    type_descr_free_names ~apply_renaming_head:Rec_info_expr.apply_renaming
       ~free_names_head:free_names_head_of_kind_rec_info ty
 
 and free_names_head_of_kind_value0 ~follow_closure_vars head =

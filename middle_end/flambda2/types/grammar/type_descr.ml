@@ -79,6 +79,12 @@ module T : sig
     'head t ->
     Name_occurrences.t
 
+  val free_names_no_cache :
+    apply_renaming_head:('head -> Renaming.t -> 'head) ->
+    free_names_head:('head -> Name_occurrences.t) ->
+    'head t ->
+    Name_occurrences.t
+
   val remove_unused_closure_vars_and_shortcut_aliases :
     apply_renaming_head:('head -> Renaming.t -> 'head) ->
     free_names_head:('head -> Name_occurrences.t) ->
@@ -224,6 +230,16 @@ end = struct
         ~free_names_head:
           (WDR.free_names ~apply_renaming_descr:apply_renaming_head
              ~free_names_descr:free_names_head)
+        descr
+
+  let free_names_no_cache ~apply_renaming_head ~free_names_head (t : _ t) =
+    match t with
+    | Unknown | Bottom -> Name_occurrences.empty
+    | Ok descr ->
+      Descr.free_names
+        ~free_names_head:
+          (WDR.free_names_no_cache ~apply_renaming_descr:apply_renaming_head
+              ~free_names_descr:free_names_head)
         descr
 
   let remove_unused_closure_vars_and_shortcut_aliases ~apply_renaming_head
