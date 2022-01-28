@@ -346,18 +346,16 @@ let free_variables_transitive ~free_names_of_type env free_vars_acc ty =
   let rec free_variables_transitive0 ty ~free_vars_acc =
     (* We don't need to look at symbols because the assumption (see the .mli) is
        that all symbols have valid types in the target environment. *)
-    let free_vars = free_names_of_type ty |> Name_occurrences.with_only_variables in
+    let free_vars =
+      free_names_of_type ty |> Name_occurrences.with_only_variables
+    in
     if missing_kind env free_vars
     then raise Missing_cmx_file
     else
-      let to_traverse =
-        Name_occurrences.diff free_vars free_vars_acc
-      in
+      let to_traverse = Name_occurrences.diff free_vars free_vars_acc in
       let free_vars_acc = Name_occurrences.union free_vars_acc free_vars in
-      Name_occurrences.fold_names to_traverse
-        ~init:free_vars_acc
-        ~f:(fun free_vars_acc name
-           ->
+      Name_occurrences.fold_names to_traverse ~init:free_vars_acc
+        ~f:(fun free_vars_acc name ->
           let ty = TE.find env name None in
           free_variables_transitive0 ty ~free_vars_acc)
   in
@@ -395,10 +393,13 @@ let make_suitable_for_environment env (to_erase : to_erase) bind_to_and_types =
        function above). *)
     let root_types = List.map snd bind_to_and_types in
     match
-      List.fold_left (free_variables_transitive ~free_names_of_type:TG.free_names env)
-        Name_occurrences.empty root_types,
-      List.fold_left (free_variables_transitive ~free_names_of_type:TG.free_names_except_through_closure_vars env)
-        Name_occurrences.empty root_types
+      ( List.fold_left
+          (free_variables_transitive ~free_names_of_type:TG.free_names env)
+          Name_occurrences.empty root_types,
+        List.fold_left
+          (free_variables_transitive
+             ~free_names_of_type:TG.free_names_except_through_closure_vars env)
+          Name_occurrences.empty root_types )
     with
     | exception Missing_cmx_file ->
       (* Just forget everything if there is a .cmx file missing. *)
@@ -462,18 +463,20 @@ let make_suitable_for_environment env (to_erase : to_erase) bind_to_and_types =
       let expand_type ty =
         let rec expand var =
           let ty = TE.find env (Name.var var) None in
-          if Variable.Set.mem var to_remove then MTC.unknown_like ty else
-          match TG.get_alias_exn ty with
-          | exception Not_found ->
-            TG.project_variables_out ~to_project ~expand ty
-          | simple ->
-            Simple.pattern_match' simple
-              ~const:(fun _ -> ty)
-              ~symbol:(fun _ ~coercion:_ -> ty)
-              ~var:(fun var ~coercion ->
-                if Variable.Set.mem var to_expand
-                then TG.apply_coercion (expand var) coercion
-                else ty)
+          if Variable.Set.mem var to_remove
+          then MTC.unknown_like ty
+          else
+            match TG.get_alias_exn ty with
+            | exception Not_found ->
+              TG.project_variables_out ~to_project ~expand ty
+            | simple ->
+              Simple.pattern_match' simple
+                ~const:(fun _ -> ty)
+                ~symbol:(fun _ ~coercion:_ -> ty)
+                ~var:(fun var ~coercion ->
+                  if Variable.Set.mem var to_expand
+                  then TG.apply_coercion (expand var) coercion
+                  else ty)
         in
         TG.project_variables_out ~to_project ~expand ty
       in

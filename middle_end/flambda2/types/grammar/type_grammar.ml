@@ -379,13 +379,16 @@ let rec free_names0 ~follow_closure_vars t =
         (free_names_head_of_kind_naked_immediate0 ~follow_closure_vars)
       ty
   | Naked_float ty ->
-    type_descr_free_names ~apply_renaming_head:apply_renaming_head_of_kind_naked_float
+    type_descr_free_names
+      ~apply_renaming_head:apply_renaming_head_of_kind_naked_float
       ~free_names_head:free_names_head_of_kind_naked_float ty
   | Naked_int32 ty ->
-    type_descr_free_names ~apply_renaming_head:apply_renaming_head_of_kind_naked_int32
+    type_descr_free_names
+      ~apply_renaming_head:apply_renaming_head_of_kind_naked_int32
       ~free_names_head:free_names_head_of_kind_naked_int32 ty
   | Naked_int64 ty ->
-    type_descr_free_names ~apply_renaming_head:apply_renaming_head_of_kind_naked_int64
+    type_descr_free_names
+      ~apply_renaming_head:apply_renaming_head_of_kind_naked_int64
       ~free_names_head:free_names_head_of_kind_naked_int64 ty
   | Naked_nativeint ty ->
     type_descr_free_names
