@@ -342,24 +342,39 @@ type to_erase =
 
 exception Missing_cmx_file
 
-let free_variables_transitive env (free_vars_acc, free_vars_except_through_closure_vars_acc) ty =
-  let rec free_variables_transitive0 ty ~free_vars_acc ~free_vars_except_through_closure_vars_acc =
+let free_variables_transitive env
+    (free_vars_acc, free_vars_except_through_closure_vars_acc) ty =
+  let rec free_variables_transitive0 ty ~free_vars_acc
+      ~free_vars_except_through_closure_vars_acc =
     (* We don't need to look at symbols because the assumption (see the .mli) is
        that all symbols have valid types in the target environment. *)
     let free_vars = TG.free_names ty |> Name_occurrences.with_only_variables in
-    let free_vars_except_through_closure_vars = TG.free_names_except_through_closure_vars ty |> Name_occurrences.with_only_variables in
+    let free_vars_except_through_closure_vars =
+      TG.free_names_except_through_closure_vars ty
+      |> Name_occurrences.with_only_variables
+    in
     if missing_kind env free_vars
     then raise Missing_cmx_file
     else
-      let to_traverse = Name_occurrences.diff free_vars_except_through_closure_vars free_vars_acc in
+      let to_traverse =
+        Name_occurrences.diff free_vars_except_through_closure_vars
+          free_vars_acc
+      in
       let free_vars_acc = Name_occurrences.union free_vars_acc free_vars in
-      let free_vars_except_through_closure_vars_acc = Name_occurrences.union free_vars_except_through_closure_vars_acc free_vars_except_through_closure_vars in
-      Name_occurrences.fold_names to_traverse ~init:(free_vars_acc, free_vars_except_through_closure_vars_acc)
-        ~f:(fun (free_vars_acc, free_vars_except_through_closure_vars_acc) name ->
+      let free_vars_except_through_closure_vars_acc =
+        Name_occurrences.union free_vars_except_through_closure_vars_acc
+          free_vars_except_through_closure_vars
+      in
+      Name_occurrences.fold_names to_traverse
+        ~init:(free_vars_acc, free_vars_except_through_closure_vars_acc)
+        ~f:(fun (free_vars_acc, free_vars_except_through_closure_vars_acc) name
+           ->
           let ty = TE.find env name None in
-          free_variables_transitive0 ty ~free_vars_acc ~free_vars_except_through_closure_vars_acc)
+          free_variables_transitive0 ty ~free_vars_acc
+            ~free_vars_except_through_closure_vars_acc)
   in
-  free_variables_transitive0 ty ~free_vars_acc ~free_vars_except_through_closure_vars_acc
+  free_variables_transitive0 ty ~free_vars_acc
+    ~free_vars_except_through_closure_vars_acc
 
 let make_suitable_for_environment env (to_erase : to_erase) bind_to_and_types =
   (match to_erase with
@@ -393,7 +408,9 @@ let make_suitable_for_environment env (to_erase : to_erase) bind_to_and_types =
        function above). *)
     match
       bind_to_and_types |> List.map snd
-      |> List.fold_left (free_variables_transitive env) (Name_occurrences.empty, Name_occurrences.empty)
+      |> List.fold_left
+           (free_variables_transitive env)
+           (Name_occurrences.empty, Name_occurrences.empty)
     with
     | exception Missing_cmx_file ->
       (* Just forget everything if there is a .cmx file missing. *)
@@ -404,30 +421,44 @@ let make_suitable_for_environment env (to_erase : to_erase) bind_to_and_types =
     | free_vars, free_vars_except_through_closure_vars ->
       (* Determine which variables will be unavailable and thus need fresh ones
          assigning to them. *)
-      let unavailable_vars_renamed, unavailable_vars_expanded, unavailable_vars_removed =
+      let ( unavailable_vars_renamed,
+            unavailable_vars_expanded,
+            unavailable_vars_removed ) =
         let erase var =
           match to_erase with
           | Everything_not_in suitable_for ->
             not (TE.mem suitable_for (Name.var var))
-          | All_variables_except to_keep ->
-            not (Variable.Set.mem var to_keep)
+          | All_variables_except to_keep -> not (Variable.Set.mem var to_keep)
         in
         Name_occurrences.fold_variables free_vars ~init:([], [], [])
           ~f:(fun
-               ((unavailable_vars_renamed, unavailable_vars_expanded, unavailable_vars_removed) as
-                unavailable_vars)
+               (( unavailable_vars_renamed,
+                  unavailable_vars_expanded,
+                  unavailable_vars_removed ) as unavailable_vars)
                var
              ->
             if erase var
             then
-              if Name_occurrences.mem_var free_vars_except_through_closure_vars var then
+              if Name_occurrences.mem_var free_vars_except_through_closure_vars
+                   var
+              then
                 match Name_occurrences.count_variable free_vars var with
-                | Zero -> Misc.fatal_errorf "Inconsistent occurrences of %a in free names" Variable.print var
+                | Zero ->
+                  Misc.fatal_errorf
+                    "Inconsistent occurrences of %a in free names"
+                    Variable.print var
                 | One ->
-                  unavailable_vars_renamed, var :: unavailable_vars_expanded, unavailable_vars_removed
+                  ( unavailable_vars_renamed,
+                    var :: unavailable_vars_expanded,
+                    unavailable_vars_removed )
                 | More_than_one ->
-                  var :: unavailable_vars_renamed, unavailable_vars_expanded, unavailable_vars_removed
-              else unavailable_vars_renamed, unavailable_vars_expanded, var :: unavailable_vars_removed
+                  ( var :: unavailable_vars_renamed,
+                    unavailable_vars_expanded,
+                    unavailable_vars_removed )
+              else
+                ( unavailable_vars_renamed,
+                  unavailable_vars_expanded,
+                  var :: unavailable_vars_removed )
             else unavailable_vars)
       in
       (* Fetch the type equation for each free variable. Also add in the
@@ -435,8 +466,8 @@ let make_suitable_for_environment env (to_erase : to_erase) bind_to_and_types =
          of the "bind-to" names are already defined in [env], the type given in
          [bind_to_and_types] takes precedence over such definition. All
          occurrences of variables that only occur once are expanded directly.
-         All occurrences of variables that are only reachable through closure variables
-         are replaced with an Unknown type. *)
+         All occurrences of variables that are only reachable through closure
+         variables are replaced with an Unknown type. *)
       let to_expand = Variable.Set.of_list unavailable_vars_expanded in
       let to_remove = Variable.Set.of_list unavailable_vars_removed in
       let to_project = Variable.Set.union to_expand to_remove in

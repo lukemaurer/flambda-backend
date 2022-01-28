@@ -365,11 +365,14 @@ let rec free_names0 ~follow_closure_vars t =
   match t with
   | Value ty ->
     TD.free_names ~apply_renaming_head:apply_renaming_head_of_kind_value
-      ~free_names_head:(free_names_head_of_kind_value0 ~follow_closure_vars) ty
+      ~free_names_head:(free_names_head_of_kind_value0 ~follow_closure_vars)
+      ty
   | Naked_immediate ty ->
     TD.free_names
       ~apply_renaming_head:apply_renaming_head_of_kind_naked_immediate
-      ~free_names_head:(free_names_head_of_kind_naked_immediate0 ~follow_closure_vars) ty
+      ~free_names_head:
+        (free_names_head_of_kind_naked_immediate0 ~follow_closure_vars)
+      ty
   | Naked_float ty ->
     TD.free_names ~apply_renaming_head:apply_renaming_head_of_kind_naked_float
       ~free_names_head:free_names_head_of_kind_naked_float ty
@@ -391,15 +394,19 @@ and free_names_head_of_kind_value0 ~follow_closure_vars head =
   match head with
   | Variant { blocks; immediates; is_unique = _ } ->
     Name_occurrences.union
-      (Or_unknown.free_names (free_names_row_like_for_blocks ~follow_closure_vars) blocks)
+      (Or_unknown.free_names
+         (free_names_row_like_for_blocks ~follow_closure_vars)
+         blocks)
       (Or_unknown.free_names (free_names0 ~follow_closure_vars) immediates)
   | Boxed_float ty -> free_names0 ~follow_closure_vars ty
   | Boxed_int32 ty -> free_names0 ~follow_closure_vars ty
   | Boxed_int64 ty -> free_names0 ~follow_closure_vars ty
   | Boxed_nativeint ty -> free_names0 ~follow_closure_vars ty
-  | Closures { by_closure_id } -> free_names_row_like_for_closures ~follow_closure_vars by_closure_id
+  | Closures { by_closure_id } ->
+    free_names_row_like_for_closures ~follow_closure_vars by_closure_id
   | String _ -> Name_occurrences.empty
-  | Array { element_kind = _; length } -> free_names0 ~follow_closure_vars length
+  | Array { element_kind = _; length } ->
+    free_names0 ~follow_closure_vars length
 
 and free_names_head_of_kind_naked_immediate0 ~follow_closure_vars head =
   match head with
@@ -420,7 +427,8 @@ and free_names_head_of_kind_rec_info head =
 and free_names_row_like :
       'row_tag 'index 'maps_to 'known.
       free_names_index:('index -> Name_occurrences.t) ->
-      free_names_maps_to:(follow_closure_vars:bool -> 'maps_to -> Name_occurrences.t) ->
+      free_names_maps_to:
+        (follow_closure_vars:bool -> 'maps_to -> Name_occurrences.t) ->
       follow_closure_vars:bool ->
       known:'known ->
       other:('index, 'maps_to) row_like_case Or_bottom.t ->
@@ -430,7 +438,8 @@ and free_names_row_like :
         'acc ->
         'acc) ->
       Name_occurrences.t =
- fun ~free_names_index ~free_names_maps_to ~follow_closure_vars ~known ~other ~fold_known ->
+ fun ~free_names_index ~free_names_maps_to ~follow_closure_vars ~known ~other
+     ~fold_known ->
   let[@inline always] free_names_index index =
     match index with Known index | At_least index -> free_names_index index
   in
@@ -453,16 +462,18 @@ and free_names_row_like :
       (Name_occurrences.union from_known
          (free_names_env_extension ~follow_closure_vars env_extension))
 
-and free_names_row_like_for_blocks ~follow_closure_vars { known_tags; other_tags } =
+and free_names_row_like_for_blocks ~follow_closure_vars
+    { known_tags; other_tags } =
   free_names_row_like
     ~free_names_index:(fun _block_size -> Name_occurrences.empty)
-    ~free_names_maps_to:free_names_int_indexed_product ~follow_closure_vars ~known:known_tags
-    ~other:other_tags ~fold_known:Tag.Map.fold
+    ~free_names_maps_to:free_names_int_indexed_product ~follow_closure_vars
+    ~known:known_tags ~other:other_tags ~fold_known:Tag.Map.fold
 
-and free_names_row_like_for_closures ~follow_closure_vars { known_closures; other_closures } =
+and free_names_row_like_for_closures ~follow_closure_vars
+    { known_closures; other_closures } =
   free_names_row_like ~free_names_index:Set_of_closures_contents.free_names
-    ~free_names_maps_to:free_names_closures_entry ~follow_closure_vars ~known:known_closures
-    ~other:other_closures ~fold_known:Closure_id.Map.fold
+    ~free_names_maps_to:free_names_closures_entry ~follow_closure_vars
+    ~known:known_closures ~other:other_closures ~fold_known:Closure_id.Map.fold
 
 and free_names_closures_entry ~follow_closure_vars
     { function_types; closure_types; closure_var_types } =
@@ -477,15 +488,17 @@ and free_names_closures_entry ~follow_closure_vars
     if follow_closure_vars
     then
       Name_occurrences.union
-        (free_names_closure_id_indexed_product ~follow_closure_vars closure_types)
-        (free_names_var_within_closure_indexed_product ~follow_closure_vars closure_var_types)
+        (free_names_closure_id_indexed_product ~follow_closure_vars
+           closure_types)
+        (free_names_var_within_closure_indexed_product ~follow_closure_vars
+           closure_var_types)
     else
       free_names_closure_id_indexed_product ~follow_closure_vars closure_types
   in
-  Name_occurrences.union function_types_free_names
-    closure_elements_free_names
+  Name_occurrences.union function_types_free_names closure_elements_free_names
 
-and free_names_closure_id_indexed_product ~follow_closure_vars { closure_id_components_by_index } =
+and free_names_closure_id_indexed_product ~follow_closure_vars
+    { closure_id_components_by_index } =
   Closure_id.Map.fold
     (fun _ t free_names_acc ->
       Name_occurrences.union (free_names0 ~follow_closure_vars t) free_names_acc)
@@ -496,7 +509,9 @@ and free_names_var_within_closure_indexed_product ~follow_closure_vars
   Var_within_closure.Map.fold
     (fun closure_var t free_names_acc ->
       Name_occurrences.add_closure_var
-        (Name_occurrences.union (free_names0 ~follow_closure_vars t) free_names_acc)
+        (Name_occurrences.union
+           (free_names0 ~follow_closure_vars t)
+           free_names_acc)
         closure_var Name_mode.normal)
     var_within_closure_components_by_index Name_occurrences.empty
 
@@ -506,24 +521,28 @@ and free_names_int_indexed_product ~follow_closure_vars { fields; kind = _ } =
       Name_occurrences.union (free_names0 ~follow_closure_vars t) free_names_acc)
     Name_occurrences.empty fields
 
-and free_names_function_type ~follow_closure_vars (function_type : _ Or_unknown_or_bottom.t) =
+and free_names_function_type ~follow_closure_vars
+    (function_type : _ Or_unknown_or_bottom.t) =
   match function_type with
   | Bottom | Unknown -> Name_occurrences.empty
   | Ok { code_id; rec_info } ->
-    Name_occurrences.add_code_id (free_names0 ~follow_closure_vars rec_info) code_id Name_mode.normal
+    Name_occurrences.add_code_id
+      (free_names0 ~follow_closure_vars rec_info)
+      code_id Name_mode.normal
 
 and free_names_env_extension ~follow_closure_vars { equations } =
   Name.Map.fold
     (fun name t acc ->
-      let acc = Name_occurrences.union acc (free_names0 ~follow_closure_vars t) in
+      let acc =
+        Name_occurrences.union acc (free_names0 ~follow_closure_vars t)
+      in
       Name_occurrences.add_name acc name Name_mode.in_types)
     equations Name_occurrences.empty
 
 let free_names_except_through_closure_vars t =
   free_names0 ~follow_closure_vars:false t
 
-let free_names t =
-  free_names0 ~follow_closure_vars:true t
+let free_names t = free_names0 ~follow_closure_vars:true t
 
 let free_names_head_of_kind_value t =
   free_names_head_of_kind_value0 ~follow_closure_vars:true t
@@ -1527,8 +1546,7 @@ let rec project_variables_out ~to_project ~expand t =
         ~apply_renaming_head:apply_renaming_head_of_kind_naked_float
         ~free_names_head:free_names_head_of_kind_naked_float ~to_project
         ~expand:expand_with_coercion
-        ~project_head:
-          (project_head_of_kind_naked_float ~to_project ~expand)
+        ~project_head:(project_head_of_kind_naked_float ~to_project ~expand)
         ty
     in
     if ty == ty' then t else Naked_float ty'
@@ -1547,8 +1565,7 @@ let rec project_variables_out ~to_project ~expand t =
         ~apply_renaming_head:apply_renaming_head_of_kind_naked_int32
         ~free_names_head:free_names_head_of_kind_naked_int32 ~to_project
         ~expand:expand_with_coercion
-        ~project_head:
-          (project_head_of_kind_naked_int32 ~to_project ~expand)
+        ~project_head:(project_head_of_kind_naked_int32 ~to_project ~expand)
         ty
     in
     if ty == ty' then t else Naked_int32 ty'
@@ -1567,8 +1584,7 @@ let rec project_variables_out ~to_project ~expand t =
         ~apply_renaming_head:apply_renaming_head_of_kind_naked_int64
         ~free_names_head:free_names_head_of_kind_naked_int64 ~to_project
         ~expand:expand_with_coercion
-        ~project_head:
-          (project_head_of_kind_naked_int64 ~to_project ~expand)
+        ~project_head:(project_head_of_kind_naked_int64 ~to_project ~expand)
         ty
     in
     if ty == ty' then t else Naked_int64 ty'
@@ -1588,8 +1604,7 @@ let rec project_variables_out ~to_project ~expand t =
         ~apply_renaming_head:apply_renaming_head_of_kind_naked_nativeint
         ~free_names_head:free_names_head_of_kind_naked_nativeint ~to_project
         ~expand:expand_with_coercion
-        ~project_head:
-          (project_head_of_kind_naked_nativeint ~to_project ~expand)
+        ~project_head:(project_head_of_kind_naked_nativeint ~to_project ~expand)
         ty
     in
     if ty == ty' then t else Naked_nativeint ty'
@@ -1608,8 +1623,7 @@ let rec project_variables_out ~to_project ~expand t =
         ~apply_renaming_head:apply_renaming_head_of_kind_rec_info
         ~free_names_head:free_names_head_of_kind_rec_info ~to_project
         ~expand:expand_with_coercion
-        ~project_head:
-          (project_head_of_kind_rec_info ~to_project ~expand)
+        ~project_head:(project_head_of_kind_rec_info ~to_project ~expand)
         ty
     in
     if ty == ty' then t else Rec_info ty'
@@ -1676,8 +1690,7 @@ and project_head_of_kind_rec_info ~to_project ~expand:_ head =
   | Var var ->
     if not (Variable.Set.mem var to_project)
     then head
-    else
-      Misc.fatal_error "Project of depth variables is not implemented"
+    else Misc.fatal_error "Project of depth variables is not implemented"
 
 and project_row_like_for_blocks ~to_project ~expand
     ({ known_tags; other_tags } as blocks) =
@@ -1687,7 +1700,9 @@ and project_row_like_for_blocks ~to_project ~expand
         let env_extension' =
           project_env_extension ~to_project ~expand env_extension
         in
-        let maps_to' = project_int_indexed_product ~to_project ~expand maps_to in
+        let maps_to' =
+          project_int_indexed_product ~to_project ~expand maps_to
+        in
         if env_extension == env_extension' && maps_to == maps_to'
         then case
         else { index; env_extension = env_extension'; maps_to = maps_to' })
@@ -1791,8 +1806,8 @@ and project_var_within_closure_indexed_product ~to_project ~expand
         var_within_closure_components_by_index'
     }
 
-and project_int_indexed_product ~to_project ~expand ({ fields; kind } as product)
-    =
+and project_int_indexed_product ~to_project ~expand
+    ({ fields; kind } as product) =
   let changed = ref false in
   let fields' = Array.copy fields in
   for i = 0 to Array.length fields - 1 do

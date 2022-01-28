@@ -132,7 +132,9 @@ end = struct
         if head == head' then t else No_alias head'
       | Equals _ -> t
 
-    type ('head, 'descr) project_result = | Not_expanded of 'head t | Expanded of 'descr
+    type ('head, 'descr) project_result =
+      | Not_expanded of 'head t
+      | Expanded of 'descr
 
     let project_variables_out ~to_project ~expand ~project_head t =
       match t with
@@ -225,18 +227,17 @@ end = struct
       ~expand ~project_head (t : _ t) : _ t =
     match t with
     | Unknown | Bottom -> t
-    | Ok descr ->
+    | Ok descr -> (
       let project_head wdr =
         WDR.project_variables_out ~apply_renaming_descr:apply_renaming_head
-          ~free_names_descr:free_names_head ~to_project ~project_descr:project_head wdr
+          ~free_names_descr:free_names_head ~to_project
+          ~project_descr:project_head wdr
       in
       match
-        Descr.project_variables_out ~to_project
-          ~expand ~project_head descr
+        Descr.project_variables_out ~to_project ~expand ~project_head descr
       with
-      | Not_expanded descr' ->
-        if descr == descr' then t else Ok descr'
-      | Expanded t' -> t'
+      | Not_expanded descr' -> if descr == descr' then t else Ok descr'
+      | Expanded t' -> t')
 end
 
 include T
