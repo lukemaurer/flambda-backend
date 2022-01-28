@@ -361,15 +361,15 @@ and apply_renaming_env_extension ({ equations } as env_extension) renaming =
   in
   if !changed then { equations = equations' } else env_extension
 
-let rec free_names ~follow_closure_vars t =
+let rec free_names0 ~follow_closure_vars t =
   match t with
   | Value ty ->
     TD.free_names ~apply_renaming_head:apply_renaming_head_of_kind_value
-      ~free_names_head:(free_names_head_of_kind_value ~follow_closure_vars) ty
+      ~free_names_head:(free_names_head_of_kind_value0 ~follow_closure_vars) ty
   | Naked_immediate ty ->
     TD.free_names
       ~apply_renaming_head:apply_renaming_head_of_kind_naked_immediate
-      ~free_names_head:(free_names_head_of_kind_naked_immediate ~follow_closure_vars) ty
+      ~free_names_head:(free_names_head_of_kind_naked_immediate0 ~follow_closure_vars) ty
   | Naked_float ty ->
     TD.free_names ~apply_renaming_head:apply_renaming_head_of_kind_naked_float
       ~free_names_head:free_names_head_of_kind_naked_float ty
@@ -387,24 +387,24 @@ let rec free_names ~follow_closure_vars t =
     TD.free_names ~apply_renaming_head:Rec_info_expr.apply_renaming
       ~free_names_head:free_names_head_of_kind_rec_info ty
 
-and free_names_head_of_kind_value ~follow_closure_vars head =
+and free_names_head_of_kind_value0 ~follow_closure_vars head =
   match head with
   | Variant { blocks; immediates; is_unique = _ } ->
     Name_occurrences.union
       (Or_unknown.free_names (free_names_row_like_for_blocks ~follow_closure_vars) blocks)
-      (Or_unknown.free_names (free_names ~follow_closure_vars) immediates)
-  | Boxed_float ty -> free_names ~follow_closure_vars ty
-  | Boxed_int32 ty -> free_names ~follow_closure_vars ty
-  | Boxed_int64 ty -> free_names ~follow_closure_vars ty
-  | Boxed_nativeint ty -> free_names ~follow_closure_vars ty
+      (Or_unknown.free_names (free_names0 ~follow_closure_vars) immediates)
+  | Boxed_float ty -> free_names0 ~follow_closure_vars ty
+  | Boxed_int32 ty -> free_names0 ~follow_closure_vars ty
+  | Boxed_int64 ty -> free_names0 ~follow_closure_vars ty
+  | Boxed_nativeint ty -> free_names0 ~follow_closure_vars ty
   | Closures { by_closure_id } -> free_names_row_like_for_closures ~follow_closure_vars by_closure_id
   | String _ -> Name_occurrences.empty
-  | Array { element_kind = _; length } -> free_names ~follow_closure_vars length
+  | Array { element_kind = _; length } -> free_names0 ~follow_closure_vars length
 
-and free_names_head_of_kind_naked_immediate ~follow_closure_vars head =
+and free_names_head_of_kind_naked_immediate0 ~follow_closure_vars head =
   match head with
   | Naked_immediates _ -> Name_occurrences.empty
-  | Is_int ty | Get_tag ty -> free_names ~follow_closure_vars ty
+  | Is_int ty | Get_tag ty -> free_names0 ~follow_closure_vars ty
 
 and free_names_head_of_kind_naked_float _ = Name_occurrences.empty
 
@@ -488,7 +488,7 @@ and free_names_closures_entry ~follow_closure_vars
 and free_names_closure_id_indexed_product ~follow_closure_vars { closure_id_components_by_index } =
   Closure_id.Map.fold
     (fun _ t free_names_acc ->
-      Name_occurrences.union (free_names ~follow_closure_vars t) free_names_acc)
+      Name_occurrences.union (free_names0 ~follow_closure_vars t) free_names_acc)
     closure_id_components_by_index Name_occurrences.empty
 
 and free_names_var_within_closure_indexed_product ~follow_closure_vars
@@ -496,40 +496,40 @@ and free_names_var_within_closure_indexed_product ~follow_closure_vars
   Var_within_closure.Map.fold
     (fun closure_var t free_names_acc ->
       Name_occurrences.add_closure_var
-        (Name_occurrences.union (free_names ~follow_closure_vars t) free_names_acc)
+        (Name_occurrences.union (free_names0 ~follow_closure_vars t) free_names_acc)
         closure_var Name_mode.normal)
     var_within_closure_components_by_index Name_occurrences.empty
 
 and free_names_int_indexed_product ~follow_closure_vars { fields; kind = _ } =
   Array.fold_left
     (fun free_names_acc t ->
-      Name_occurrences.union (free_names ~follow_closure_vars t) free_names_acc)
+      Name_occurrences.union (free_names0 ~follow_closure_vars t) free_names_acc)
     Name_occurrences.empty fields
 
 and free_names_function_type ~follow_closure_vars (function_type : _ Or_unknown_or_bottom.t) =
   match function_type with
   | Bottom | Unknown -> Name_occurrences.empty
   | Ok { code_id; rec_info } ->
-    Name_occurrences.add_code_id (free_names ~follow_closure_vars rec_info) code_id Name_mode.normal
+    Name_occurrences.add_code_id (free_names0 ~follow_closure_vars rec_info) code_id Name_mode.normal
 
 and free_names_env_extension ~follow_closure_vars { equations } =
   Name.Map.fold
     (fun name t acc ->
-      let acc = Name_occurrences.union acc (free_names ~follow_closure_vars t) in
+      let acc = Name_occurrences.union acc (free_names0 ~follow_closure_vars t) in
       Name_occurrences.add_name acc name Name_mode.in_types)
     equations Name_occurrences.empty
 
 let free_names_except_through_closure_vars t =
-  free_names ~follow_closure_vars:false t
+  free_names0 ~follow_closure_vars:false t
 
 let free_names t =
-  free_names ~follow_closure_vars:true t
+  free_names0 ~follow_closure_vars:true t
 
 let free_names_head_of_kind_value t =
-  free_names_head_of_kind_value ~follow_closure_vars:true t
+  free_names_head_of_kind_value0 ~follow_closure_vars:true t
 
 let free_names_head_of_kind_naked_immediate t =
-  free_names_head_of_kind_naked_immediate ~follow_closure_vars:true t
+  free_names_head_of_kind_naked_immediate0 ~follow_closure_vars:true t
 
 let rec print ppf t =
   let no_renaming thing _ = thing in
