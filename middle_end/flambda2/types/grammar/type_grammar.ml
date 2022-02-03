@@ -47,18 +47,24 @@ type t =
   | Naked_int64 of head_of_kind_naked_int64 TD.t
   | Naked_nativeint of head_of_kind_naked_nativeint TD.t
   | Rec_info of head_of_kind_rec_info TD.t
+  | Region of head_of_kind_region TD.t
 
 and head_of_kind_value =
   | Variant of
       { immediates : t Or_unknown.t;
         blocks : row_like_for_blocks Or_unknown.t;
-        is_unique : bool
+        is_unique : bool;
+        alloc_mode : Alloc_mode.t Or_unknown.t
       }
-  | Boxed_float of t
-  | Boxed_int32 of t
-  | Boxed_int64 of t
-  | Boxed_nativeint of t
-  | Closures of { by_closure_id : row_like_for_closures }
+  | Mutable_block of { alloc_mode : Alloc_mode.t Or_unknown.t }
+  | Boxed_float of t * Alloc_mode.t Or_unknown.t
+  | Boxed_int32 of t * Alloc_mode.t Or_unknown.t
+  | Boxed_int64 of t * Alloc_mode.t Or_unknown.t
+  | Boxed_nativeint of t * Alloc_mode.t Or_unknown.t
+  | Closures of
+      { by_closure_id : row_like_for_closures;
+        alloc_mode : Alloc_mode.t Or_unknown.t
+      }
   | String of String_info.Set.t
   | Array of
       { element_kind : Flambda_kind.With_subkind.t Or_unknown.t;
@@ -79,6 +85,8 @@ and head_of_kind_naked_int64 = Int64.Set.t
 and head_of_kind_naked_nativeint = Targetint_32_64.Set.t
 
 and head_of_kind_rec_info = Rec_info_expr.t
+
+and head_of_kind_region = unit
 
 (* For row-like, ['index] must not contain any names. *)
 
@@ -138,6 +146,8 @@ and int_indexed_product =
 and function_type =
   { code_id : Code_id.t;
     rec_info : t
+        (* XXX need to understand this properly can_allocate_in_caller's_region
+           : bool Or_unknown.t *)
   }
 
 and env_extension = { equations : t Name.Map.t } [@@unboxed]
@@ -147,36 +157,70 @@ type flambda_type = t
 let row_like_is_bottom ~known ~(other : _ Or_bottom.t) ~is_empty_map_known =
   is_empty_map_known known && match other with Bottom -> true | Ok _ -> false
 
-let apply_renaming t renaming =
+let rec apply_renaming t renaming =
   if Renaming.is_empty renaming
   then t
   else
     match t with
     | Value ty ->
-      let ty' = TD.apply_renaming ty renaming in
+      let ty' =
+        TD.apply_renaming ~apply_renaming_head:apply_renaming_head_of_kind_value
+          ~free_names_head:free_names_head_of_kind_value ty renaming
+      in
       if ty == ty' then t else Value ty'
     | Naked_immediate ty ->
-      let ty' = TD.apply_renaming ty renaming in
+      let ty' =
+        TD.apply_renaming
+          ~apply_renaming_head:apply_renaming_head_of_kind_naked_immediate
+          ~free_names_head:free_names_head_of_kind_naked_immediate ty renaming
+      in
       if ty == ty' then t else Naked_immediate ty'
     | Naked_float ty ->
-      let ty' = TD.apply_renaming ty renaming in
+      let ty' =
+        TD.apply_renaming
+          ~apply_renaming_head:apply_renaming_head_of_kind_naked_float
+          ~free_names_head:free_names_head_of_kind_naked_float ty renaming
+      in
       if ty == ty' then t else Naked_float ty'
     | Naked_int32 ty ->
-      let ty' = TD.apply_renaming ty renaming in
+      let ty' =
+        TD.apply_renaming
+          ~apply_renaming_head:apply_renaming_head_of_kind_naked_int32
+          ~free_names_head:free_names_head_of_kind_naked_int32 ty renaming
+      in
       if ty == ty' then t else Naked_int32 ty'
     | Naked_int64 ty ->
-      let ty' = TD.apply_renaming ty renaming in
+      let ty' =
+        TD.apply_renaming
+          ~apply_renaming_head:apply_renaming_head_of_kind_naked_int64
+          ~free_names_head:free_names_head_of_kind_naked_int64 ty renaming
+      in
       if ty == ty' then t else Naked_int64 ty'
     | Naked_nativeint ty ->
-      let ty' = TD.apply_renaming ty renaming in
+      let ty' =
+        TD.apply_renaming
+          ~apply_renaming_head:apply_renaming_head_of_kind_naked_nativeint
+          ~free_names_head:free_names_head_of_kind_naked_nativeint ty renaming
+      in
       if ty == ty' then t else Naked_nativeint ty'
     | Rec_info ty ->
-      let ty' = TD.apply_renaming ty renaming in
+      let ty' =
+        TD.apply_renaming
+          ~apply_renaming_head:apply_renaming_head_of_kind_rec_info
+          ~free_names_head:free_names_head_of_kind_rec_info ty renaming
+      in
       if ty == ty' then t else Rec_info ty'
+    | Region ty ->
+      let ty' =
+        TD.apply_renaming
+          ~apply_renaming_head:apply_renaming_head_of_kind_region
+          ~free_names_head:free_names_head_of_kind_region ty renaming
+      in
+      if ty == ty' then t else Region ty'
 
-let rec apply_renaming_head_of_kind_value head renaming =
+and apply_renaming_head_of_kind_value head renaming =
   match head with
-  | Variant { blocks; immediates; is_unique } ->
+  | Variant { blocks; immediates; is_unique; alloc_mode } ->
     let immediates' =
       let>+$ immediates = immediates in
       apply_renaming immediates renaming
@@ -187,26 +231,29 @@ let rec apply_renaming_head_of_kind_value head renaming =
     in
     if immediates == immediates' && blocks == blocks'
     then head
-    else Variant { is_unique; blocks = blocks'; immediates = immediates' }
-  | Boxed_float ty ->
+    else
+      Variant
+        { is_unique; blocks = blocks'; immediates = immediates'; alloc_mode }
+  | Mutable_block { alloc_mode = _ } -> head
+  | Boxed_float (ty, alloc_mode) ->
     let ty' = apply_renaming ty renaming in
-    if ty == ty' then head else Boxed_float ty'
-  | Boxed_int32 ty ->
+    if ty == ty' then head else Boxed_float (ty', alloc_mode)
+  | Boxed_int32 (ty, alloc_mode) ->
     let ty' = apply_renaming ty renaming in
-    if ty == ty' then head else Boxed_int32 ty'
-  | Boxed_int64 ty ->
+    if ty == ty' then head else Boxed_int32 (ty', alloc_mode)
+  | Boxed_int64 (ty, alloc_mode) ->
     let ty' = apply_renaming ty renaming in
-    if ty == ty' then head else Boxed_int64 ty'
-  | Boxed_nativeint ty ->
+    if ty == ty' then head else Boxed_int64 (ty', alloc_mode)
+  | Boxed_nativeint (ty, alloc_mode) ->
     let ty' = apply_renaming ty renaming in
-    if ty == ty' then head else Boxed_nativeint ty'
-  | Closures { by_closure_id } ->
+    if ty == ty' then head else Boxed_nativeint (ty', alloc_mode)
+  | Closures { by_closure_id; alloc_mode } ->
     let by_closure_id' =
       apply_renaming_row_like_for_closures by_closure_id renaming
     in
     if by_closure_id == by_closure_id'
     then head
-    else Closures { by_closure_id = by_closure_id' }
+    else Closures { by_closure_id = by_closure_id'; alloc_mode }
   | String _ -> head
   | Array { element_kind; length } ->
     let length' = apply_renaming length renaming in
@@ -232,6 +279,8 @@ and apply_renaming_head_of_kind_naked_nativeint head _ = head
 
 and apply_renaming_head_of_kind_rec_info head renaming =
   Rec_info_expr.apply_renaming head renaming
+
+and apply_renaming_head_of_kind_region () _renaming = ()
 
 and apply_renaming_row_like :
       'index 'maps_to 'known.
@@ -361,56 +410,53 @@ and apply_renaming_env_extension ({ equations } as env_extension) renaming =
   in
   if !changed then { equations = equations' } else env_extension
 
-let rec free_names0 ~follow_closure_vars t =
-  let[@inline] type_descr_free_names ~apply_renaming_head ~free_names_head ty =
+and free_names0 ~follow_closure_vars t =
+  let[@inline] type_descr_free_names ~free_names_head ty =
     if follow_closure_vars
-    then TD.free_names ~apply_renaming_head ~free_names_head ty
-    else TD.free_names_no_cache ~apply_renaming_head ~free_names_head ty
+    then TD.free_names ~free_names_head ty
+    else TD.free_names_no_cache ~free_names_head ty
   in
   match t with
   | Value ty ->
-    type_descr_free_names ~apply_renaming_head:apply_renaming_head_of_kind_value
+    type_descr_free_names
       ~free_names_head:(free_names_head_of_kind_value0 ~follow_closure_vars)
       ty
   | Naked_immediate ty ->
     type_descr_free_names
-      ~apply_renaming_head:apply_renaming_head_of_kind_naked_immediate
       ~free_names_head:
         (free_names_head_of_kind_naked_immediate0 ~follow_closure_vars)
       ty
   | Naked_float ty ->
-    type_descr_free_names
-      ~apply_renaming_head:apply_renaming_head_of_kind_naked_float
-      ~free_names_head:free_names_head_of_kind_naked_float ty
+    type_descr_free_names ~free_names_head:free_names_head_of_kind_naked_float
+      ty
   | Naked_int32 ty ->
-    type_descr_free_names
-      ~apply_renaming_head:apply_renaming_head_of_kind_naked_int32
-      ~free_names_head:free_names_head_of_kind_naked_int32 ty
+    type_descr_free_names ~free_names_head:free_names_head_of_kind_naked_int32
+      ty
   | Naked_int64 ty ->
-    type_descr_free_names
-      ~apply_renaming_head:apply_renaming_head_of_kind_naked_int64
-      ~free_names_head:free_names_head_of_kind_naked_int64 ty
+    type_descr_free_names ~free_names_head:free_names_head_of_kind_naked_int64
+      ty
   | Naked_nativeint ty ->
     type_descr_free_names
-      ~apply_renaming_head:apply_renaming_head_of_kind_naked_nativeint
       ~free_names_head:free_names_head_of_kind_naked_nativeint ty
   | Rec_info ty ->
-    type_descr_free_names ~apply_renaming_head:Rec_info_expr.apply_renaming
-      ~free_names_head:free_names_head_of_kind_rec_info ty
+    type_descr_free_names ~free_names_head:free_names_head_of_kind_rec_info ty
+  | Region ty ->
+    type_descr_free_names ~free_names_head:free_names_head_of_kind_region ty
 
 and free_names_head_of_kind_value0 ~follow_closure_vars head =
   match head with
-  | Variant { blocks; immediates; is_unique = _ } ->
+  | Variant { blocks; immediates; is_unique = _; alloc_mode = _ } ->
     Name_occurrences.union
       (Or_unknown.free_names
          (free_names_row_like_for_blocks ~follow_closure_vars)
          blocks)
       (Or_unknown.free_names (free_names0 ~follow_closure_vars) immediates)
-  | Boxed_float ty -> free_names0 ~follow_closure_vars ty
-  | Boxed_int32 ty -> free_names0 ~follow_closure_vars ty
-  | Boxed_int64 ty -> free_names0 ~follow_closure_vars ty
-  | Boxed_nativeint ty -> free_names0 ~follow_closure_vars ty
-  | Closures { by_closure_id } ->
+  | Mutable_block { alloc_mode = _ } -> Name_occurrences.empty
+  | Boxed_float (ty, _alloc_mode) -> free_names0 ~follow_closure_vars ty
+  | Boxed_int32 (ty, _alloc_mode) -> free_names0 ~follow_closure_vars ty
+  | Boxed_int64 (ty, _alloc_mode) -> free_names0 ~follow_closure_vars ty
+  | Boxed_nativeint (ty, _alloc_mode) -> free_names0 ~follow_closure_vars ty
+  | Closures { by_closure_id; alloc_mode = _ } ->
     free_names_row_like_for_closures ~follow_closure_vars by_closure_id
   | String _ -> Name_occurrences.empty
   | Array { element_kind = _; length } ->
@@ -431,6 +477,8 @@ and free_names_head_of_kind_naked_nativeint _ = Name_occurrences.empty
 
 and free_names_head_of_kind_rec_info head =
   Rec_info_expr.free_names_in_types head
+
+and free_names_head_of_kind_region () = Name_occurrences.empty
 
 and free_names_row_like :
       'row_tag 'index 'maps_to 'known.
@@ -487,9 +535,11 @@ and free_names_closures_entry ~follow_closure_vars
     { function_types; closure_types; closure_var_types } =
   let function_types_free_names =
     Closure_id.Map.fold
-      (fun _closure_id function_decl free_names ->
+      (fun closure_id function_decl free_names ->
         Name_occurrences.union free_names
-          (free_names_function_type ~follow_closure_vars function_decl))
+          (Name_occurrences.add_closure_id
+             (free_names_function_type ~follow_closure_vars function_decl)
+             closure_id Name_mode.normal))
       function_types Name_occurrences.empty
   in
   let closure_elements_free_names =
@@ -547,76 +597,85 @@ and free_names_env_extension ~follow_closure_vars { equations } =
       Name_occurrences.add_name acc name Name_mode.in_types)
     equations Name_occurrences.empty
 
-let free_names_except_through_closure_vars t =
+and free_names_except_through_closure_vars t =
   free_names0 ~follow_closure_vars:false t
 
-let free_names t = free_names0 ~follow_closure_vars:true t
+and free_names t = free_names0 ~follow_closure_vars:true t
 
-let free_names_head_of_kind_value t =
+and free_names_head_of_kind_value t =
   free_names_head_of_kind_value0 ~follow_closure_vars:true t
 
-let free_names_head_of_kind_naked_immediate t =
+and free_names_head_of_kind_naked_immediate t =
   free_names_head_of_kind_naked_immediate0 ~follow_closure_vars:true t
 
 let rec print ppf t =
-  let no_renaming thing _ = thing in
-  let no_free_names _ = Name_occurrences.empty in
   match t with
   | Value ty ->
     Format.fprintf ppf "@[<hov 1>(Val@ %a)@]"
-      (TD.print ~print_head:print_head_of_kind_value
-         ~apply_renaming_head:apply_renaming_head_of_kind_value
-         ~free_names_head:free_names_head_of_kind_value)
+      (TD.print ~print_head:print_head_of_kind_value)
       ty
   | Naked_immediate ty ->
     Format.fprintf ppf "@[<hov 1>(Naked_immediate@ %a)@]"
-      (TD.print ~print_head:print_head_of_kind_naked_immediate
-         ~apply_renaming_head:no_renaming ~free_names_head:no_free_names)
+      (TD.print ~print_head:print_head_of_kind_naked_immediate)
       ty
   | Naked_float ty ->
     Format.fprintf ppf "@[<hov 1>(Naked_float@ %a)@]"
-      (TD.print ~print_head:print_head_of_kind_naked_float
-         ~apply_renaming_head:no_renaming ~free_names_head:no_free_names)
+      (TD.print ~print_head:print_head_of_kind_naked_float)
       ty
   | Naked_int32 ty ->
     Format.fprintf ppf "@[<hov 1>(Naked_int32@ %a)@]"
-      (TD.print ~print_head:print_head_of_kind_naked_int32
-         ~apply_renaming_head:no_renaming ~free_names_head:no_free_names)
+      (TD.print ~print_head:print_head_of_kind_naked_int32)
       ty
   | Naked_int64 ty ->
     Format.fprintf ppf "@[<hov 1>(Naked_int64@ %a)@]"
-      (TD.print ~print_head:print_head_of_kind_naked_int64
-         ~apply_renaming_head:no_renaming ~free_names_head:no_free_names)
+      (TD.print ~print_head:print_head_of_kind_naked_int64)
       ty
   | Naked_nativeint ty ->
     Format.fprintf ppf "@[<hov 1>(Naked_nativeint@ %a)@]"
-      (TD.print ~print_head:print_head_of_kind_naked_nativeint
-         ~apply_renaming_head:no_renaming ~free_names_head:no_free_names)
+      (TD.print ~print_head:print_head_of_kind_naked_nativeint)
       ty
   | Rec_info ty ->
     Format.fprintf ppf "@[<hov 1>(Rec_info@ %a)@]"
-      (TD.print ~print_head:print_head_of_kind_rec_info
-         ~apply_renaming_head:apply_renaming_head_of_kind_rec_info
-         ~free_names_head:free_names_head_of_kind_rec_info)
+      (TD.print ~print_head:print_head_of_kind_rec_info)
+      ty
+  | Region ty ->
+    Format.fprintf ppf "@[<hov 1>(Region@ %a)@]"
+      (TD.print ~print_head:print_head_of_kind_region)
       ty
 
 and print_head_of_kind_value ppf head =
   match head with
-  | Variant { blocks; immediates; is_unique } ->
+  | Variant { blocks; immediates; is_unique; alloc_mode } ->
     (* CR mshinwell: Improve so that we elide blocks and/or immediates when
        they're empty. *)
     Format.fprintf ppf
       "@[<hov 1>(Variant%s@ @[<hov 1>(blocks@ %a)@]@ @[<hov 1>(tagged_imms@ \
        %a)@])@]"
       (if is_unique then " unique" else "")
-      (Or_unknown.print print_row_like_for_blocks)
+      (Or_unknown.print (print_row_like_for_blocks alloc_mode))
       blocks (Or_unknown.print print) immediates
-  | Boxed_float ty -> Format.fprintf ppf "@[<hov 1>(Boxed_float@ %a)@]" print ty
-  | Boxed_int32 ty -> Format.fprintf ppf "@[<hov 1>(Boxed_int32@ %a)@]" print ty
-  | Boxed_int64 ty -> Format.fprintf ppf "@[<hov 1>(Boxed_int64@ %a)@]" print ty
-  | Boxed_nativeint ty ->
-    Format.fprintf ppf "@[<hov 1>(Boxed_nativeint@ %a)@]" print ty
-  | Closures { by_closure_id } -> print_row_like_for_closures ppf by_closure_id
+  | Mutable_block { alloc_mode } ->
+    Format.fprintf ppf "@[<hov 1>(Mutable_block@ %a)@]"
+      (Or_unknown.print Alloc_mode.print)
+      alloc_mode
+  | Boxed_float (ty, alloc_mode) ->
+    Format.fprintf ppf "@[<hov 1>(Boxed_float@ %a@ %a)@]"
+      (Or_unknown.print Alloc_mode.print)
+      alloc_mode print ty
+  | Boxed_int32 (ty, alloc_mode) ->
+    Format.fprintf ppf "@[<hov 1>(Boxed_int32@ %a@ %a)@]"
+      (Or_unknown.print Alloc_mode.print)
+      alloc_mode print ty
+  | Boxed_int64 (ty, alloc_mode) ->
+    Format.fprintf ppf "@[<hov 1>(Boxed_int64@ %a@ %a)@]"
+      (Or_unknown.print Alloc_mode.print)
+      alloc_mode print ty
+  | Boxed_nativeint (ty, alloc_mode) ->
+    Format.fprintf ppf "@[<hov 1>(Boxed_nativeint@ %a@ %a)@]"
+      (Or_unknown.print Alloc_mode.print)
+      alloc_mode print ty
+  | Closures { by_closure_id; alloc_mode } ->
+    print_row_like_for_closures alloc_mode ppf by_closure_id
   | String str_infos ->
     Format.fprintf ppf "@[<hov 1>(Strings@ (%a))@]" String_info.Set.print
       str_infos
@@ -647,6 +706,8 @@ and print_head_of_kind_naked_nativeint ppf head =
 
 and print_head_of_kind_rec_info ppf head = Rec_info_expr.print ppf head
 
+and print_head_of_kind_region ppf () = Format.pp_print_string ppf "Region"
+
 and print_row_like :
       'index 'maps_to 'known.
       print_index:(Format.formatter -> 'index -> unit) ->
@@ -659,10 +720,11 @@ and print_row_like :
       is_empty_map_known:('known -> bool) ->
       known:'known ->
       other:('index, 'maps_to) row_like_case Or_bottom.t ->
+      Alloc_mode.t Or_unknown.t ->
       Format.formatter ->
       unit =
  fun ~print_index ~print_maps_to ~print_known_map ~is_empty_map_known ~known
-     ~other ppf ->
+     ~other alloc_mode ppf ->
   let print_index ppf = function
     | Known index -> Format.fprintf ppf "(Known @[<2>%a@])" print_index index
     | At_least min_index ->
@@ -687,19 +749,23 @@ and print_row_like :
         pp_env_extension env_extension
     in
     Format.fprintf ppf
-      "@[<hov 1>(@[<hov 1>(known@ %a)@]@ @[<hov 1>(other@ %a)@])@]"
-      (print_known_map print) known (Or_bottom.print print) other
+      "@[<hov 1>(@[<hov 1>(alloc_mode@ %a)@ (known@ %a)@]@ @[<hov 1>(other@ \
+       %a)@])@]"
+      (Or_unknown.print Alloc_mode.print)
+      alloc_mode (print_known_map print) known (Or_bottom.print print) other
 
-and print_row_like_for_blocks ppf { known_tags; other_tags } =
+and print_row_like_for_blocks alloc_mode ppf { known_tags; other_tags } =
   print_row_like ~print_index:Block_size.print
     ~print_maps_to:print_int_indexed_product ~print_known_map:Tag.Map.print
-    ~is_empty_map_known:Tag.Map.is_empty ~known:known_tags ~other:other_tags ppf
+    ~is_empty_map_known:Tag.Map.is_empty ~known:known_tags ~other:other_tags
+    alloc_mode ppf
 
-and print_row_like_for_closures ppf { known_closures; other_closures } =
+and print_row_like_for_closures alloc_mode ppf
+    { known_closures; other_closures } =
   print_row_like ~print_index:Set_of_closures_contents.print
     ~print_maps_to:print_closures_entry ~print_known_map:Closure_id.Map.print
     ~is_empty_map_known:Closure_id.Map.is_empty ~known:known_closures
-    ~other:other_closures ppf
+    ~other:other_closures alloc_mode ppf
 
 and print_closures_entry ppf
     { function_types; closure_types; closure_var_types } =
@@ -753,54 +819,45 @@ and print_env_extension ppf { equations } =
 let rec all_ids_for_export t =
   match t with
   | Value ty ->
-    TD.all_ids_for_export ~apply_renaming_head:apply_renaming_head_of_kind_value
-      ~free_names_head:free_names_head_of_kind_value
+    TD.all_ids_for_export
       ~all_ids_for_export_head:all_ids_for_export_head_of_kind_value ty
   | Naked_immediate ty ->
     TD.all_ids_for_export
-      ~apply_renaming_head:apply_renaming_head_of_kind_naked_immediate
-      ~free_names_head:free_names_head_of_kind_naked_immediate
       ~all_ids_for_export_head:all_ids_for_export_head_of_kind_naked_immediate
       ty
   | Naked_float ty ->
     TD.all_ids_for_export
-      ~apply_renaming_head:apply_renaming_head_of_kind_naked_float
-      ~free_names_head:free_names_head_of_kind_naked_float
       ~all_ids_for_export_head:all_ids_for_export_head_of_kind_naked_float ty
   | Naked_int32 ty ->
     TD.all_ids_for_export
-      ~apply_renaming_head:apply_renaming_head_of_kind_naked_int32
-      ~free_names_head:free_names_head_of_kind_naked_int32
       ~all_ids_for_export_head:all_ids_for_export_head_of_kind_naked_int32 ty
   | Naked_int64 ty ->
     TD.all_ids_for_export
-      ~apply_renaming_head:apply_renaming_head_of_kind_naked_int64
-      ~free_names_head:free_names_head_of_kind_naked_int64
       ~all_ids_for_export_head:all_ids_for_export_head_of_kind_naked_int64 ty
   | Naked_nativeint ty ->
     TD.all_ids_for_export
-      ~apply_renaming_head:apply_renaming_head_of_kind_naked_nativeint
-      ~free_names_head:free_names_head_of_kind_naked_nativeint
       ~all_ids_for_export_head:all_ids_for_export_head_of_kind_naked_nativeint
       ty
   | Rec_info ty ->
     TD.all_ids_for_export
-      ~apply_renaming_head:apply_renaming_head_of_kind_rec_info
-      ~free_names_head:free_names_head_of_kind_rec_info
       ~all_ids_for_export_head:all_ids_for_export_head_of_kind_rec_info ty
+  | Region ty ->
+    TD.all_ids_for_export
+      ~all_ids_for_export_head:all_ids_for_export_head_of_kind_region ty
 
 and all_ids_for_export_head_of_kind_value head =
   match head with
-  | Variant { blocks; immediates; is_unique = _ } ->
+  | Variant { blocks; immediates; is_unique = _; alloc_mode = _ } ->
     Ids_for_export.union
       (Or_unknown.all_ids_for_export all_ids_for_export_row_like_for_blocks
          blocks)
       (Or_unknown.all_ids_for_export all_ids_for_export immediates)
-  | Boxed_float t -> all_ids_for_export t
-  | Boxed_int32 t -> all_ids_for_export t
-  | Boxed_int64 t -> all_ids_for_export t
-  | Boxed_nativeint t -> all_ids_for_export t
-  | Closures { by_closure_id } ->
+  | Mutable_block { alloc_mode = _ } -> Ids_for_export.empty
+  | Boxed_float (t, _alloc_mode) -> all_ids_for_export t
+  | Boxed_int32 (t, _alloc_mode) -> all_ids_for_export t
+  | Boxed_int64 (t, _alloc_mode) -> all_ids_for_export t
+  | Boxed_nativeint (t, _alloc_mode) -> all_ids_for_export t
+  | Closures { by_closure_id; alloc_mode = _ } ->
     all_ids_for_export_row_like_for_closures by_closure_id
   | String _ -> Ids_for_export.empty
   | Array { element_kind = _; length } -> all_ids_for_export length
@@ -820,6 +877,8 @@ and all_ids_for_export_head_of_kind_naked_nativeint _ = Ids_for_export.empty
 
 and all_ids_for_export_head_of_kind_rec_info head =
   Rec_info_expr.all_ids_for_export head
+
+and all_ids_for_export_head_of_kind_region () = Ids_for_export.empty
 
 and all_ids_for_export_row_like :
       'row_tag 'index 'maps_to 'known.
@@ -931,73 +990,72 @@ let rec apply_coercion t coercion : t Or_bottom.t =
     | Value ty ->
       let<+ ty' =
         TD.apply_coercion ~apply_coercion_head:apply_coercion_head_of_kind_value
-          ~apply_renaming_head:apply_renaming_head_of_kind_value
-          ~free_names_head:free_names_head_of_kind_value coercion ty
+          coercion ty
       in
       if ty == ty' then t else Value ty'
     | Naked_immediate ty ->
       let<+ ty' =
         TD.apply_coercion
           ~apply_coercion_head:apply_coercion_head_of_kind_naked_immediate
-          ~apply_renaming_head:apply_renaming_head_of_kind_naked_immediate
-          ~free_names_head:free_names_head_of_kind_naked_immediate coercion ty
+          coercion ty
       in
       if ty == ty' then t else Naked_immediate ty'
     | Naked_float ty ->
       let<+ ty' =
         TD.apply_coercion
-          ~apply_coercion_head:apply_coercion_head_of_kind_naked_float
-          ~apply_renaming_head:apply_renaming_head_of_kind_naked_float
-          ~free_names_head:free_names_head_of_kind_naked_float coercion ty
+          ~apply_coercion_head:apply_coercion_head_of_kind_naked_float coercion
+          ty
       in
       if ty == ty' then t else Naked_float ty'
     | Naked_int32 ty ->
       let<+ ty' =
         TD.apply_coercion
-          ~apply_coercion_head:apply_coercion_head_of_kind_naked_int32
-          ~apply_renaming_head:apply_renaming_head_of_kind_naked_int32
-          ~free_names_head:free_names_head_of_kind_naked_int32 coercion ty
+          ~apply_coercion_head:apply_coercion_head_of_kind_naked_int32 coercion
+          ty
       in
       if ty == ty' then t else Naked_int32 ty'
     | Naked_int64 ty ->
       let<+ ty' =
         TD.apply_coercion
-          ~apply_coercion_head:apply_coercion_head_of_kind_naked_int64
-          ~apply_renaming_head:apply_renaming_head_of_kind_naked_int64
-          ~free_names_head:free_names_head_of_kind_naked_int64 coercion ty
+          ~apply_coercion_head:apply_coercion_head_of_kind_naked_int64 coercion
+          ty
       in
       if ty == ty' then t else Naked_int64 ty'
     | Naked_nativeint ty ->
       let<+ ty' =
         TD.apply_coercion
           ~apply_coercion_head:apply_coercion_head_of_kind_naked_nativeint
-          ~apply_renaming_head:apply_renaming_head_of_kind_naked_nativeint
-          ~free_names_head:free_names_head_of_kind_naked_nativeint coercion ty
+          coercion ty
       in
       if ty == ty' then t else Naked_nativeint ty'
     | Rec_info ty ->
       let<+ ty' =
         TD.apply_coercion
-          ~apply_coercion_head:apply_coercion_head_of_kind_rec_info
-          ~apply_renaming_head:apply_renaming_head_of_kind_rec_info
-          ~free_names_head:free_names_head_of_kind_rec_info coercion ty
+          ~apply_coercion_head:apply_coercion_head_of_kind_rec_info coercion ty
       in
       if ty == ty' then t else Rec_info ty'
+    | Region ty ->
+      let<+ ty' =
+        TD.apply_coercion
+          ~apply_coercion_head:apply_coercion_head_of_kind_region coercion ty
+      in
+      if ty == ty' then t else Region ty'
 
 and apply_coercion_head_of_kind_value head coercion : _ Or_bottom.t =
   match head with
-  | Closures { by_closure_id } ->
+  | Closures { by_closure_id; alloc_mode } ->
     let<+ by_closure_id' =
       apply_coercion_row_like_for_closures by_closure_id coercion
     in
     if by_closure_id == by_closure_id'
     then head
-    else Closures { by_closure_id = by_closure_id' }
+    else Closures { by_closure_id = by_closure_id'; alloc_mode }
   | Variant _ ->
     (* See the comment on [apply_coercion]. The situation for variants (sums) is
        similar to that for tuples (products): we would want a coercion for each
        branch. *)
     if Coercion.is_id coercion then Ok head else Bottom
+  | Mutable_block { alloc_mode = _ } -> Ok head
   | Boxed_float _ ->
     (* Even if we had coercions that would act on float constants, we would want
        to have a [Boxed_float] wrapper that would lift a float coercion to a
@@ -1030,6 +1088,8 @@ and apply_coercion_head_of_kind_rec_info head coercion : _ Or_bottom.t =
   (* Currently no coercion has an effect on a depth variable and
      [Rec_info_expr.t] does not contain any other variety of name. *)
   if Coercion.is_id coercion then Ok head else Bottom
+
+and apply_coercion_head_of_kind_region () _coercion : _ Or_bottom.t = Ok ()
 
 and apply_coercion_row_like :
       'index 'maps_to 'row_tag 'known.
@@ -1218,147 +1278,187 @@ let apply_coercion t coercion =
     Misc.fatal_errorf "Cannot apply coercion %a@ to type %a" Coercion.print
       coercion print t
 
-let rec remove_unused_closure_vars t ~used_closure_vars =
+let rec remove_unused_closure_vars_and_shortcut_aliases t ~used_closure_vars
+    ~canonicalise =
   match t with
   | Value ty ->
     let ty' =
-      TD.remove_unused_closure_vars ty ~used_closure_vars
-        ~remove_unused_closure_vars_head:
-          remove_unused_closure_vars_head_of_kind_value
-        ~apply_renaming_head:apply_renaming_head_of_kind_value
-        ~free_names_head:free_names_head_of_kind_value
+      TD.remove_unused_closure_vars_and_shortcut_aliases ty ~used_closure_vars
+        ~canonicalise
+        ~remove_unused_closure_vars_and_shortcut_aliases_head:
+          remove_unused_closure_vars_and_shortcut_aliases_head_of_kind_value
     in
     if ty == ty' then t else Value ty'
   | Naked_immediate ty ->
     let ty' =
-      TD.remove_unused_closure_vars ty ~used_closure_vars
-        ~remove_unused_closure_vars_head:
-          remove_unused_closure_vars_head_of_kind_naked_immediate
-        ~apply_renaming_head:apply_renaming_head_of_kind_naked_immediate
-        ~free_names_head:free_names_head_of_kind_naked_immediate
+      TD.remove_unused_closure_vars_and_shortcut_aliases ty ~used_closure_vars
+        ~canonicalise
+        ~remove_unused_closure_vars_and_shortcut_aliases_head:
+          remove_unused_closure_vars_and_shortcut_aliases_head_of_kind_naked_immediate
     in
     if ty == ty' then t else Naked_immediate ty'
   | Naked_float ty ->
     let ty' =
-      TD.remove_unused_closure_vars ty ~used_closure_vars
-        ~remove_unused_closure_vars_head:
-          remove_unused_closure_vars_head_of_kind_naked_float
-        ~apply_renaming_head:apply_renaming_head_of_kind_naked_float
-        ~free_names_head:free_names_head_of_kind_naked_float
+      TD.remove_unused_closure_vars_and_shortcut_aliases ty ~used_closure_vars
+        ~canonicalise
+        ~remove_unused_closure_vars_and_shortcut_aliases_head:
+          remove_unused_closure_vars_and_shortcut_aliases_head_of_kind_naked_float
     in
     if ty == ty' then t else Naked_float ty'
   | Naked_int32 ty ->
     let ty' =
-      TD.remove_unused_closure_vars ty ~used_closure_vars
-        ~remove_unused_closure_vars_head:
-          remove_unused_closure_vars_head_of_kind_naked_int32
-        ~apply_renaming_head:apply_renaming_head_of_kind_naked_int32
-        ~free_names_head:free_names_head_of_kind_naked_int32
+      TD.remove_unused_closure_vars_and_shortcut_aliases ty ~used_closure_vars
+        ~canonicalise
+        ~remove_unused_closure_vars_and_shortcut_aliases_head:
+          remove_unused_closure_vars_and_shortcut_aliases_head_of_kind_naked_int32
     in
     if ty == ty' then t else Naked_int32 ty'
   | Naked_int64 ty ->
     let ty' =
-      TD.remove_unused_closure_vars ty ~used_closure_vars
-        ~remove_unused_closure_vars_head:
-          remove_unused_closure_vars_head_of_kind_naked_int64
-        ~apply_renaming_head:apply_renaming_head_of_kind_naked_int64
-        ~free_names_head:free_names_head_of_kind_naked_int64
+      TD.remove_unused_closure_vars_and_shortcut_aliases ty ~used_closure_vars
+        ~canonicalise
+        ~remove_unused_closure_vars_and_shortcut_aliases_head:
+          remove_unused_closure_vars_and_shortcut_aliases_head_of_kind_naked_int64
     in
     if ty == ty' then t else Naked_int64 ty'
   | Naked_nativeint ty ->
     let ty' =
-      TD.remove_unused_closure_vars ty ~used_closure_vars
-        ~remove_unused_closure_vars_head:
-          remove_unused_closure_vars_head_of_kind_naked_nativeint
-        ~apply_renaming_head:apply_renaming_head_of_kind_naked_nativeint
-        ~free_names_head:free_names_head_of_kind_naked_nativeint
+      TD.remove_unused_closure_vars_and_shortcut_aliases ty ~used_closure_vars
+        ~canonicalise
+        ~remove_unused_closure_vars_and_shortcut_aliases_head:
+          remove_unused_closure_vars_and_shortcut_aliases_head_of_kind_naked_nativeint
     in
     if ty == ty' then t else Naked_nativeint ty'
   | Rec_info ty ->
     let ty' =
-      TD.remove_unused_closure_vars ty ~used_closure_vars
-        ~remove_unused_closure_vars_head:
-          remove_unused_closure_vars_head_of_kind_rec_info
-        ~apply_renaming_head:apply_renaming_head_of_kind_rec_info
-        ~free_names_head:free_names_head_of_kind_rec_info
+      TD.remove_unused_closure_vars_and_shortcut_aliases ty ~used_closure_vars
+        ~canonicalise
+        ~remove_unused_closure_vars_and_shortcut_aliases_head:
+          remove_unused_closure_vars_and_shortcut_aliases_head_of_kind_rec_info
     in
     if ty == ty' then t else Rec_info ty'
+  | Region ty ->
+    let ty' =
+      TD.remove_unused_closure_vars_and_shortcut_aliases ty ~used_closure_vars
+        ~canonicalise
+        ~remove_unused_closure_vars_and_shortcut_aliases_head:
+          remove_unused_closure_vars_and_shortcut_aliases_head_of_kind_region
+    in
+    if ty == ty' then t else Region ty'
 
-and remove_unused_closure_vars_head_of_kind_value head ~used_closure_vars =
+and remove_unused_closure_vars_and_shortcut_aliases_head_of_kind_value head
+    ~used_closure_vars ~canonicalise =
   match head with
-  | Variant { blocks; immediates; is_unique } ->
+  | Variant { blocks; immediates; is_unique; alloc_mode } ->
     let immediates' =
       let>+$ immediates = immediates in
-      remove_unused_closure_vars immediates ~used_closure_vars
+      remove_unused_closure_vars_and_shortcut_aliases immediates
+        ~used_closure_vars ~canonicalise
     in
     let blocks' =
       let>+$ blocks = blocks in
-      remove_unused_closure_vars_row_like_for_blocks blocks ~used_closure_vars
+      remove_unused_closure_vars_and_shortcut_aliases_row_like_for_blocks blocks
+        ~used_closure_vars ~canonicalise
     in
     if immediates == immediates' && blocks == blocks'
     then head
-    else Variant { is_unique; blocks = blocks'; immediates = immediates' }
-  | Boxed_float ty ->
-    let ty' = remove_unused_closure_vars ty ~used_closure_vars in
-    if ty == ty' then head else Boxed_float ty'
-  | Boxed_int32 ty ->
-    let ty' = remove_unused_closure_vars ty ~used_closure_vars in
-    if ty == ty' then head else Boxed_int32 ty'
-  | Boxed_int64 ty ->
-    let ty' = remove_unused_closure_vars ty ~used_closure_vars in
-    if ty == ty' then head else Boxed_int64 ty'
-  | Boxed_nativeint ty ->
-    let ty' = remove_unused_closure_vars ty ~used_closure_vars in
-    if ty == ty' then head else Boxed_nativeint ty'
-  | Closures { by_closure_id } ->
+    else
+      Variant
+        { is_unique; blocks = blocks'; immediates = immediates'; alloc_mode }
+  | Mutable_block { alloc_mode = _ } -> head
+  | Boxed_float (ty, alloc_mode) ->
+    let ty' =
+      remove_unused_closure_vars_and_shortcut_aliases ty ~used_closure_vars
+        ~canonicalise
+    in
+    if ty == ty' then head else Boxed_float (ty', alloc_mode)
+  | Boxed_int32 (ty, alloc_mode) ->
+    let ty' =
+      remove_unused_closure_vars_and_shortcut_aliases ty ~used_closure_vars
+        ~canonicalise
+    in
+    if ty == ty' then head else Boxed_int32 (ty', alloc_mode)
+  | Boxed_int64 (ty, alloc_mode) ->
+    let ty' =
+      remove_unused_closure_vars_and_shortcut_aliases ty ~used_closure_vars
+        ~canonicalise
+    in
+    if ty == ty' then head else Boxed_int64 (ty', alloc_mode)
+  | Boxed_nativeint (ty, alloc_mode) ->
+    let ty' =
+      remove_unused_closure_vars_and_shortcut_aliases ty ~used_closure_vars
+        ~canonicalise
+    in
+    if ty == ty' then head else Boxed_nativeint (ty', alloc_mode)
+  | Closures { by_closure_id; alloc_mode } ->
     let by_closure_id' =
-      remove_unused_closure_vars_row_like_for_closures by_closure_id
-        ~used_closure_vars
+      remove_unused_closure_vars_and_shortcut_aliases_row_like_for_closures
+        by_closure_id ~used_closure_vars ~canonicalise
     in
     if by_closure_id == by_closure_id'
     then head
-    else Closures { by_closure_id = by_closure_id' }
+    else Closures { by_closure_id = by_closure_id'; alloc_mode }
   | String _ -> head
   | Array { element_kind; length } ->
-    let length' = remove_unused_closure_vars length ~used_closure_vars in
+    let length' =
+      remove_unused_closure_vars_and_shortcut_aliases length ~used_closure_vars
+        ~canonicalise
+    in
     if length == length' then head else Array { element_kind; length = length' }
 
-and remove_unused_closure_vars_head_of_kind_naked_immediate head
-    ~used_closure_vars =
+and remove_unused_closure_vars_and_shortcut_aliases_head_of_kind_naked_immediate
+    head ~used_closure_vars ~canonicalise =
   match head with
   | Naked_immediates _ -> head
   | Is_int ty ->
-    let ty' = remove_unused_closure_vars ty ~used_closure_vars in
+    let ty' =
+      remove_unused_closure_vars_and_shortcut_aliases ty ~used_closure_vars
+        ~canonicalise
+    in
     if ty == ty' then head else Is_int ty'
   | Get_tag ty ->
-    let ty' = remove_unused_closure_vars ty ~used_closure_vars in
+    let ty' =
+      remove_unused_closure_vars_and_shortcut_aliases ty ~used_closure_vars
+        ~canonicalise
+    in
     if ty == ty' then head else Get_tag ty'
 
-and remove_unused_closure_vars_head_of_kind_naked_float head
-    ~used_closure_vars:_ =
+and remove_unused_closure_vars_and_shortcut_aliases_head_of_kind_naked_float
+    head ~used_closure_vars:_ ~canonicalise:_ =
   head
 
-and remove_unused_closure_vars_head_of_kind_naked_int32 head
-    ~used_closure_vars:_ =
+and remove_unused_closure_vars_and_shortcut_aliases_head_of_kind_naked_int32
+    head ~used_closure_vars:_ ~canonicalise:_ =
   head
 
-and remove_unused_closure_vars_head_of_kind_naked_int64 head
-    ~used_closure_vars:_ =
+and remove_unused_closure_vars_and_shortcut_aliases_head_of_kind_naked_int64
+    head ~used_closure_vars:_ ~canonicalise:_ =
   head
 
-and remove_unused_closure_vars_head_of_kind_naked_nativeint head
-    ~used_closure_vars:_ =
+and remove_unused_closure_vars_and_shortcut_aliases_head_of_kind_naked_nativeint
+    head ~used_closure_vars:_ ~canonicalise:_ =
   head
 
-and remove_unused_closure_vars_head_of_kind_rec_info head ~used_closure_vars:_ =
+and remove_unused_closure_vars_and_shortcut_aliases_head_of_kind_rec_info head
+    ~used_closure_vars:_ ~canonicalise:_ =
   head
 
-and remove_unused_closure_vars_row_like :
+and remove_unused_closure_vars_and_shortcut_aliases_head_of_kind_region ()
+    ~used_closure_vars:_ ~canonicalise:_ =
+  ()
+
+and remove_unused_closure_vars_and_shortcut_aliases_row_like :
       'index 'maps_to 'known.
-      remove_unused_closure_vars_index:
-        ('index -> used_closure_vars:Var_within_closure.Set.t -> 'index) ->
-      remove_unused_closure_vars_maps_to:
-        ('maps_to -> used_closure_vars:Var_within_closure.Set.t -> 'maps_to) ->
+      remove_unused_closure_vars_and_shortcut_aliases_index:
+        ('index ->
+        used_closure_vars:Var_within_closure.Set.t ->
+        canonicalise:(Simple.t -> Simple.t) ->
+        'index) ->
+      remove_unused_closure_vars_and_shortcut_aliases_maps_to:
+        ('maps_to ->
+        used_closure_vars:Var_within_closure.Set.t ->
+        canonicalise:(Simple.t -> Simple.t) ->
+        'maps_to) ->
       known:'known ->
       other:('index, 'maps_to) row_like_case Or_bottom.t ->
       map_known:
@@ -1366,24 +1466,32 @@ and remove_unused_closure_vars_row_like :
         'known ->
         'known) ->
       used_closure_vars:Var_within_closure.Set.t ->
+      canonicalise:(Simple.t -> Simple.t) ->
       ('known * ('index, 'maps_to) row_like_case Or_bottom.t) option =
- fun ~remove_unused_closure_vars_index ~remove_unused_closure_vars_maps_to
-     ~known ~other ~map_known ~used_closure_vars ->
-  let[@inline always] remove_unused_closure_vars_index = function
+ fun ~remove_unused_closure_vars_and_shortcut_aliases_index
+     ~remove_unused_closure_vars_and_shortcut_aliases_maps_to ~known ~other
+     ~map_known ~used_closure_vars ~canonicalise ->
+  let[@inline always] remove_unused_closure_vars_and_shortcut_aliases_index =
+    function
     | Known index ->
-      Known (remove_unused_closure_vars_index index ~used_closure_vars)
+      Known
+        (remove_unused_closure_vars_and_shortcut_aliases_index index
+           ~used_closure_vars ~canonicalise)
     | At_least index ->
-      At_least (remove_unused_closure_vars_index index ~used_closure_vars)
+      At_least
+        (remove_unused_closure_vars_and_shortcut_aliases_index index
+           ~used_closure_vars ~canonicalise)
   in
   let known' =
     map_known
       (fun { index; maps_to; env_extension } ->
-        { index = remove_unused_closure_vars_index index;
+        { index = remove_unused_closure_vars_and_shortcut_aliases_index index;
           env_extension =
-            remove_unused_closure_vars_env_extension env_extension
-              ~used_closure_vars;
+            remove_unused_closure_vars_and_shortcut_aliases_env_extension
+              env_extension ~used_closure_vars ~canonicalise;
           maps_to =
-            remove_unused_closure_vars_maps_to maps_to ~used_closure_vars
+            remove_unused_closure_vars_and_shortcut_aliases_maps_to maps_to
+              ~used_closure_vars ~canonicalise
         })
       known
   in
@@ -1393,72 +1501,81 @@ and remove_unused_closure_vars_row_like :
     | Ok { index; maps_to; env_extension } ->
       (* CR mshinwell: phys-equal tests here and elsewhere are inadequate *)
       Ok
-        { index = remove_unused_closure_vars_index index;
+        { index = remove_unused_closure_vars_and_shortcut_aliases_index index;
           env_extension =
-            remove_unused_closure_vars_env_extension env_extension
-              ~used_closure_vars;
+            remove_unused_closure_vars_and_shortcut_aliases_env_extension
+              env_extension ~used_closure_vars ~canonicalise;
           maps_to =
-            remove_unused_closure_vars_maps_to maps_to ~used_closure_vars
+            remove_unused_closure_vars_and_shortcut_aliases_maps_to maps_to
+              ~used_closure_vars ~canonicalise
         }
   in
   if known == known' && other == other' then None else Some (known', other')
 
-and remove_unused_closure_vars_row_like_for_blocks
-    ({ known_tags; other_tags } as row_like_for_tags) ~used_closure_vars =
+and remove_unused_closure_vars_and_shortcut_aliases_row_like_for_blocks
+    ({ known_tags; other_tags } as row_like_for_tags) ~used_closure_vars
+    ~canonicalise =
   match
-    remove_unused_closure_vars_row_like
-      ~remove_unused_closure_vars_index:(fun block_size ~used_closure_vars:_ ->
-        block_size)
-      ~remove_unused_closure_vars_maps_to:
-        remove_unused_closure_vars_int_indexed_product ~known:known_tags
-      ~other:other_tags ~map_known:Tag.Map.map_sharing ~used_closure_vars
+    remove_unused_closure_vars_and_shortcut_aliases_row_like
+      ~remove_unused_closure_vars_and_shortcut_aliases_index:
+        (fun block_size ~used_closure_vars:_ ~canonicalise:_ -> block_size)
+      ~remove_unused_closure_vars_and_shortcut_aliases_maps_to:
+        remove_unused_closure_vars_and_shortcut_aliases_int_indexed_product
+      ~known:known_tags ~other:other_tags ~map_known:Tag.Map.map_sharing
+      ~used_closure_vars ~canonicalise
   with
   | None -> row_like_for_tags
   | Some (known_tags, other_tags) -> { known_tags; other_tags }
 
-and remove_unused_closure_vars_row_like_for_closures
+and remove_unused_closure_vars_and_shortcut_aliases_row_like_for_closures
     ({ known_closures; other_closures } as row_like_for_closures)
-    ~used_closure_vars =
+    ~used_closure_vars ~canonicalise =
   match
-    remove_unused_closure_vars_row_like
-      ~remove_unused_closure_vars_index:
-        Set_of_closures_contents.remove_unused_closure_vars
-      ~remove_unused_closure_vars_maps_to:
-        remove_unused_closure_vars_closures_entry ~known:known_closures
-      ~other:other_closures ~map_known:Closure_id.Map.map_sharing
-      ~used_closure_vars
+    remove_unused_closure_vars_and_shortcut_aliases_row_like
+      ~remove_unused_closure_vars_and_shortcut_aliases_index:
+        (fun index ~used_closure_vars ~canonicalise:_ ->
+        Set_of_closures_contents.remove_unused_closure_vars index
+          ~used_closure_vars)
+      ~remove_unused_closure_vars_and_shortcut_aliases_maps_to:
+        remove_unused_closure_vars_and_shortcut_aliases_closures_entry
+      ~known:known_closures ~other:other_closures
+      ~map_known:Closure_id.Map.map_sharing ~used_closure_vars ~canonicalise
   with
   | None -> row_like_for_closures
   | Some (known_closures, other_closures) -> { known_closures; other_closures }
 
-and remove_unused_closure_vars_closures_entry
-    { function_types; closure_types; closure_var_types } ~used_closure_vars =
+and remove_unused_closure_vars_and_shortcut_aliases_closures_entry
+    { function_types; closure_types; closure_var_types } ~used_closure_vars
+    ~canonicalise =
   { function_types =
       Closure_id.Map.map_sharing
         (fun function_type ->
           Or_unknown_or_bottom.map function_type ~f:(fun function_type ->
-              remove_unused_closure_vars_function_type function_type
-                ~used_closure_vars))
+              remove_unused_closure_vars_and_shortcut_aliases_function_type
+                function_type ~used_closure_vars ~canonicalise))
         function_types;
     closure_types =
-      remove_unused_closure_vars_closure_id_indexed_product closure_types
-        ~used_closure_vars;
+      remove_unused_closure_vars_and_shortcut_aliases_closure_id_indexed_product
+        closure_types ~used_closure_vars ~canonicalise;
     closure_var_types =
-      remove_unused_closure_vars_var_within_closure_indexed_product
-        closure_var_types ~used_closure_vars
+      remove_unused_closure_vars_and_shortcut_aliases_var_within_closure_indexed_product
+        closure_var_types ~used_closure_vars ~canonicalise
   }
 
-and remove_unused_closure_vars_closure_id_indexed_product
-    { closure_id_components_by_index } ~used_closure_vars =
+and remove_unused_closure_vars_and_shortcut_aliases_closure_id_indexed_product
+    { closure_id_components_by_index } ~used_closure_vars ~canonicalise =
   let closure_id_components_by_index =
     Closure_id.Map.map_sharing
-      (fun ty -> remove_unused_closure_vars ty ~used_closure_vars)
+      (fun ty ->
+        remove_unused_closure_vars_and_shortcut_aliases ty ~used_closure_vars
+          ~canonicalise)
       closure_id_components_by_index
   in
   { closure_id_components_by_index }
 
-and remove_unused_closure_vars_var_within_closure_indexed_product
-    { var_within_closure_components_by_index } ~used_closure_vars =
+and remove_unused_closure_vars_and_shortcut_aliases_var_within_closure_indexed_product
+    { var_within_closure_components_by_index } ~used_closure_vars ~canonicalise
+    =
   let var_within_closure_components_by_index =
     (* CR-someday mshinwell: some loss of sharing here, potentially *)
     Var_within_closure.Map.filter_map
@@ -1467,33 +1584,43 @@ and remove_unused_closure_vars_var_within_closure_indexed_product
               (Var_within_closure.in_compilation_unit closure_var
                  (Compilation_unit.get_current_exn ())))
            || Var_within_closure.Set.mem closure_var used_closure_vars
-        then Some (remove_unused_closure_vars ty ~used_closure_vars)
+        then
+          Some
+            (remove_unused_closure_vars_and_shortcut_aliases ty
+               ~used_closure_vars ~canonicalise)
         else None)
       var_within_closure_components_by_index
   in
   { var_within_closure_components_by_index }
 
-and remove_unused_closure_vars_int_indexed_product { fields; kind }
-    ~used_closure_vars =
+and remove_unused_closure_vars_and_shortcut_aliases_int_indexed_product
+    { fields; kind } ~used_closure_vars ~canonicalise =
   let fields = Array.copy fields in
   for i = 0 to Array.length fields - 1 do
-    fields.(i) <- remove_unused_closure_vars fields.(i) ~used_closure_vars
+    fields.(i)
+      <- remove_unused_closure_vars_and_shortcut_aliases fields.(i)
+           ~used_closure_vars ~canonicalise
   done;
   { fields; kind }
 
-and remove_unused_closure_vars_function_type
-    ({ code_id; rec_info } as function_type) ~used_closure_vars =
-  let rec_info' = remove_unused_closure_vars rec_info ~used_closure_vars in
+and remove_unused_closure_vars_and_shortcut_aliases_function_type
+    ({ code_id; rec_info } as function_type) ~used_closure_vars ~canonicalise =
+  let rec_info' =
+    remove_unused_closure_vars_and_shortcut_aliases rec_info ~used_closure_vars
+      ~canonicalise
+  in
   if rec_info == rec_info'
   then function_type
   else { code_id; rec_info = rec_info' }
 
-and remove_unused_closure_vars_env_extension ({ equations } as env_extension)
-    ~used_closure_vars =
+and remove_unused_closure_vars_and_shortcut_aliases_env_extension
+    ({ equations } as env_extension) ~used_closure_vars ~canonicalise =
   let changed = ref false in
   let equations' =
     Name.Map.map_sharing
-      (fun ty -> remove_unused_closure_vars ty ~used_closure_vars)
+      (fun ty ->
+        remove_unused_closure_vars_and_shortcut_aliases ty ~used_closure_vars
+          ~canonicalise)
       equations
   in
   if !changed then { equations = equations' } else env_extension
@@ -1505,16 +1632,14 @@ let rec project_variables_out ~to_project ~expand t =
       match apply_coercion (expand var) coercion with
       | Value ty -> ty
       | ( Naked_immediate _ | Naked_float _ | Naked_int32 _ | Naked_int64 _
-        | Naked_nativeint _ | Rec_info _ ) as ty ->
+        | Naked_nativeint _ | Rec_info _ | Region _ ) as ty ->
         Misc.fatal_errorf
           "Wrong kind while expanding %a: expecting [Value], got type %a"
           Variable.print var print ty
     in
     let ty' =
-      TD.project_variables_out
-        ~apply_renaming_head:apply_renaming_head_of_kind_value
-        ~free_names_head:free_names_head_of_kind_value ~to_project
-        ~expand:expand_with_coercion
+      TD.project_variables_out ~free_names_head:free_names_head_of_kind_value
+        ~to_project ~expand:expand_with_coercion
         ~project_head:(project_head_of_kind_value ~to_project ~expand)
         ty
     in
@@ -1524,7 +1649,7 @@ let rec project_variables_out ~to_project ~expand t =
       match apply_coercion (expand var) coercion with
       | Naked_immediate ty -> ty
       | ( Value _ | Naked_float _ | Naked_int32 _ | Naked_int64 _
-        | Naked_nativeint _ | Rec_info _ ) as ty ->
+        | Naked_nativeint _ | Rec_info _ | Region _ ) as ty ->
         Misc.fatal_errorf
           "Wrong kind while expanding %a: expecting [Naked_immediate], got \
            type %a"
@@ -1532,7 +1657,6 @@ let rec project_variables_out ~to_project ~expand t =
     in
     let ty' =
       TD.project_variables_out
-        ~apply_renaming_head:apply_renaming_head_of_kind_naked_immediate
         ~free_names_head:free_names_head_of_kind_naked_immediate ~to_project
         ~expand:expand_with_coercion
         ~project_head:(project_head_of_kind_naked_immediate ~to_project ~expand)
@@ -1544,14 +1668,13 @@ let rec project_variables_out ~to_project ~expand t =
       match apply_coercion (expand var) coercion with
       | Naked_float ty -> ty
       | ( Value _ | Naked_immediate _ | Naked_int32 _ | Naked_int64 _
-        | Naked_nativeint _ | Rec_info _ ) as ty ->
+        | Naked_nativeint _ | Rec_info _ | Region _ ) as ty ->
         Misc.fatal_errorf
           "Wrong kind while expanding %a: expecting [Naked_float], got type %a"
           Variable.print var print ty
     in
     let ty' =
       TD.project_variables_out
-        ~apply_renaming_head:apply_renaming_head_of_kind_naked_float
         ~free_names_head:free_names_head_of_kind_naked_float ~to_project
         ~expand:expand_with_coercion
         ~project_head:(project_head_of_kind_naked_float ~to_project ~expand)
@@ -1563,14 +1686,13 @@ let rec project_variables_out ~to_project ~expand t =
       match apply_coercion (expand var) coercion with
       | Naked_int32 ty -> ty
       | ( Value _ | Naked_immediate _ | Naked_float _ | Naked_int64 _
-        | Naked_nativeint _ | Rec_info _ ) as ty ->
+        | Naked_nativeint _ | Rec_info _ | Region _ ) as ty ->
         Misc.fatal_errorf
           "Wrong kind while expanding %a: expecting [Naked_int32], got type %a"
           Variable.print var print ty
     in
     let ty' =
       TD.project_variables_out
-        ~apply_renaming_head:apply_renaming_head_of_kind_naked_int32
         ~free_names_head:free_names_head_of_kind_naked_int32 ~to_project
         ~expand:expand_with_coercion
         ~project_head:(project_head_of_kind_naked_int32 ~to_project ~expand)
@@ -1582,14 +1704,13 @@ let rec project_variables_out ~to_project ~expand t =
       match apply_coercion (expand var) coercion with
       | Naked_int64 ty -> ty
       | ( Value _ | Naked_immediate _ | Naked_float _ | Naked_int32 _
-        | Naked_nativeint _ | Rec_info _ ) as ty ->
+        | Naked_nativeint _ | Rec_info _ | Region _ ) as ty ->
         Misc.fatal_errorf
           "Wrong kind while expanding %a: expecting [Naked_int64], got type %a"
           Variable.print var print ty
     in
     let ty' =
       TD.project_variables_out
-        ~apply_renaming_head:apply_renaming_head_of_kind_naked_int64
         ~free_names_head:free_names_head_of_kind_naked_int64 ~to_project
         ~expand:expand_with_coercion
         ~project_head:(project_head_of_kind_naked_int64 ~to_project ~expand)
@@ -1601,7 +1722,7 @@ let rec project_variables_out ~to_project ~expand t =
       match apply_coercion (expand var) coercion with
       | Naked_nativeint ty -> ty
       | ( Value _ | Naked_immediate _ | Naked_float _ | Naked_int32 _
-        | Naked_int64 _ | Rec_info _ ) as ty ->
+        | Naked_int64 _ | Rec_info _ | Region _ ) as ty ->
         Misc.fatal_errorf
           "Wrong kind while expanding %a: expecting [Naked_nativeint], got \
            type %a"
@@ -1609,7 +1730,6 @@ let rec project_variables_out ~to_project ~expand t =
     in
     let ty' =
       TD.project_variables_out
-        ~apply_renaming_head:apply_renaming_head_of_kind_naked_nativeint
         ~free_names_head:free_names_head_of_kind_naked_nativeint ~to_project
         ~expand:expand_with_coercion
         ~project_head:(project_head_of_kind_naked_nativeint ~to_project ~expand)
@@ -1621,24 +1741,39 @@ let rec project_variables_out ~to_project ~expand t =
       match apply_coercion (expand var) coercion with
       | Rec_info ty -> ty
       | ( Value _ | Naked_immediate _ | Naked_float _ | Naked_int32 _
-        | Naked_int64 _ | Naked_nativeint _ ) as ty ->
+        | Naked_int64 _ | Naked_nativeint _ | Region _ ) as ty ->
         Misc.fatal_errorf
           "Wrong kind while expanding %a: expecting [Rec_info], got type %a"
           Variable.print var print ty
     in
     let ty' =
-      TD.project_variables_out
-        ~apply_renaming_head:apply_renaming_head_of_kind_rec_info
-        ~free_names_head:free_names_head_of_kind_rec_info ~to_project
-        ~expand:expand_with_coercion
+      TD.project_variables_out ~free_names_head:free_names_head_of_kind_rec_info
+        ~to_project ~expand:expand_with_coercion
         ~project_head:(project_head_of_kind_rec_info ~to_project ~expand)
         ty
     in
     if ty == ty' then t else Rec_info ty'
+  | Region ty ->
+    let expand_with_coercion var ~coercion =
+      match apply_coercion (expand var) coercion with
+      | Region ty -> ty
+      | ( Value _ | Naked_immediate _ | Naked_float _ | Naked_int32 _
+        | Naked_int64 _ | Naked_nativeint _ | Rec_info _ ) as ty ->
+        Misc.fatal_errorf
+          "Wrong kind while expanding %a: expecting [Region], got type %a"
+          Variable.print var print ty
+    in
+    let ty' =
+      TD.project_variables_out ~free_names_head:free_names_head_of_kind_region
+        ~to_project ~expand:expand_with_coercion
+        ~project_head:(project_head_of_kind_region ~to_project ~expand)
+        ty
+    in
+    if ty == ty' then t else Region ty'
 
 and project_head_of_kind_value ~to_project ~expand head =
   match head with
-  | Variant { blocks; immediates; is_unique } ->
+  | Variant { blocks; immediates; is_unique; alloc_mode } ->
     let immediates' =
       let>+$ immediates = immediates in
       project_variables_out ~to_project ~expand immediates
@@ -1649,26 +1784,29 @@ and project_head_of_kind_value ~to_project ~expand head =
     in
     if immediates == immediates' && blocks == blocks'
     then head
-    else Variant { is_unique; blocks = blocks'; immediates = immediates' }
-  | Boxed_float ty ->
+    else
+      Variant
+        { is_unique; blocks = blocks'; immediates = immediates'; alloc_mode }
+  | Mutable_block _ -> head
+  | Boxed_float (ty, alloc_mode) ->
     let ty' = project_variables_out ~to_project ~expand ty in
-    if ty == ty' then head else Boxed_float ty'
-  | Boxed_int32 ty ->
+    if ty == ty' then head else Boxed_float (ty', alloc_mode)
+  | Boxed_int32 (ty, alloc_mode) ->
     let ty' = project_variables_out ~to_project ~expand ty in
-    if ty == ty' then head else Boxed_int32 ty'
-  | Boxed_int64 ty ->
+    if ty == ty' then head else Boxed_int32 (ty', alloc_mode)
+  | Boxed_int64 (ty, alloc_mode) ->
     let ty' = project_variables_out ~to_project ~expand ty in
-    if ty == ty' then head else Boxed_int64 ty'
-  | Boxed_nativeint ty ->
+    if ty == ty' then head else Boxed_int64 (ty', alloc_mode)
+  | Boxed_nativeint (ty, alloc_mode) ->
     let ty' = project_variables_out ~to_project ~expand ty in
-    if ty == ty' then head else Boxed_nativeint ty'
-  | Closures { by_closure_id } ->
+    if ty == ty' then head else Boxed_nativeint (ty', alloc_mode)
+  | Closures { by_closure_id; alloc_mode } ->
     let by_closure_id' =
       project_row_like_for_closures ~to_project ~expand by_closure_id
     in
     if by_closure_id == by_closure_id'
     then head
-    else Closures { by_closure_id = by_closure_id' }
+    else Closures { by_closure_id = by_closure_id'; alloc_mode }
   | String _ -> head
   | Array { element_kind; length } ->
     let length' = project_variables_out ~to_project ~expand length in
@@ -1699,6 +1837,8 @@ and project_head_of_kind_rec_info ~to_project ~expand:_ head =
     if not (Variable.Set.mem var to_project)
     then head
     else Misc.fatal_error "Project of depth variables is not implemented"
+
+and project_head_of_kind_region ~to_project:_ ~expand:_ head = head
 
 and project_row_like_for_blocks ~to_project ~expand
     ({ known_tags; other_tags } as blocks) =
@@ -1868,8 +2008,10 @@ let kind t =
   | Naked_int64 _ -> K.naked_int64
   | Naked_nativeint _ -> K.naked_nativeint
   | Rec_info _ -> K.rec_info
+  | Region _ -> K.region
 
-let create_variant ~is_unique ~(immediates : _ Or_unknown.t) ~blocks =
+let create_variant ~is_unique ~(immediates : _ Or_unknown.t) ~blocks alloc_mode
+    =
   begin
     match immediates with
     | Unknown -> ()
@@ -1881,10 +2023,12 @@ let create_variant ~is_unique ~(immediates : _ Or_unknown.t) ~blocks =
            [Naked_immediate]:@ %a"
           print immediates
   end;
-  Value (TD.create (Variant { immediates; blocks; is_unique }))
+  Value (TD.create (Variant { immediates; blocks; is_unique; alloc_mode }))
 
-let create_closures by_closure_id =
-  Value (TD.create (Closures { by_closure_id }))
+let mutable_block alloc_mode = Value (TD.create (Mutable_block { alloc_mode }))
+
+let create_closures alloc_mode by_closure_id =
+  Value (TD.create (Closures { by_closure_id; alloc_mode }))
 
 module Function_type = struct
   type t = function_type
@@ -2060,7 +2204,7 @@ module Row_like_for_blocks = struct
         | Naked_number Naked_int32
         | Naked_number Naked_int64
         | Naked_number Naked_nativeint
-        | Fabricated | Rec_info ->
+        | Region | Rec_info ->
           Misc.fatal_errorf "Bad kind %a for fields" Flambda_kind.print
             field_kind
       end
@@ -2083,7 +2227,7 @@ module Row_like_for_blocks = struct
         | Naked_number Naked_int32
         | Naked_number Naked_int64
         | Naked_number Naked_nativeint
-        | Fabricated | Rec_info ->
+        | Region | Rec_info ->
           Misc.fatal_errorf "Bad kind %a for fields" Flambda_kind.print
             field_kind
       end
@@ -2317,16 +2461,6 @@ module Env_extension = struct
   let to_map t = t.equations
 end
 
-let kind t =
-  match t with
-  | Value _ -> K.value
-  | Naked_immediate _ -> K.naked_immediate
-  | Naked_float _ -> K.naked_float
-  | Naked_int32 _ -> K.naked_int32
-  | Naked_int64 _ -> K.naked_int64
-  | Naked_nativeint _ -> K.naked_nativeint
-  | Rec_info _ -> K.rec_info
-
 let get_alias_exn t =
   match t with
   | Value ty -> TD.get_alias_exn ty
@@ -2336,6 +2470,7 @@ let get_alias_exn t =
   | Naked_int64 ty -> TD.get_alias_exn ty
   | Naked_nativeint ty -> TD.get_alias_exn ty
   | Rec_info ty -> TD.get_alias_exn ty
+  | Region ty -> TD.get_alias_exn ty
 
 let is_obviously_bottom t =
   match t with
@@ -2346,6 +2481,7 @@ let is_obviously_bottom t =
   | Naked_int64 ty -> TD.is_obviously_bottom ty
   | Naked_nativeint ty -> TD.is_obviously_bottom ty
   | Rec_info ty -> TD.is_obviously_bottom ty
+  | Region ty -> TD.is_obviously_bottom ty
 
 let is_obviously_unknown t =
   match t with
@@ -2356,6 +2492,7 @@ let is_obviously_unknown t =
   | Naked_int64 ty -> TD.is_obviously_unknown ty
   | Naked_nativeint ty -> TD.is_obviously_unknown ty
   | Rec_info ty -> TD.is_obviously_unknown ty
+  | Region ty -> TD.is_obviously_unknown ty
 
 let alias_type_of (kind : K.t) name : t =
   match kind with
@@ -2366,7 +2503,7 @@ let alias_type_of (kind : K.t) name : t =
   | Naked_number Naked_int64 -> Naked_int64 (TD.create_equals name)
   | Naked_number Naked_nativeint -> Naked_nativeint (TD.create_equals name)
   | Rec_info -> Rec_info (TD.create_equals name)
-  | Fabricated -> Misc.fatal_error "Unused kind, to be removed"
+  | Region -> Region (TD.create_equals name)
 
 let bottom_value = Value TD.bottom
 
@@ -2382,6 +2519,8 @@ let bottom_naked_nativeint = Naked_nativeint TD.bottom
 
 let bottom_rec_info = Rec_info TD.bottom
 
+let bottom_region = Region TD.bottom
+
 let any_value = Value TD.unknown
 
 let any_naked_immediate = Naked_immediate TD.unknown
@@ -2393,6 +2532,8 @@ let any_naked_int32 = Naked_int32 TD.unknown
 let any_naked_int64 = Naked_int64 TD.unknown
 
 let any_naked_nativeint = Naked_nativeint TD.unknown
+
+let any_region = Region TD.unknown
 
 let any_rec_info = Rec_info TD.unknown
 
@@ -2451,32 +2592,32 @@ let these_naked_nativeints ~no_alias is =
     then bottom_naked_nativeint
     else Naked_nativeint (TD.create is)
 
-let box_float (t : t) : t =
+let box_float (t : t) alloc_mode : t =
   match t with
-  | Naked_float _ -> Value (TD.create (Boxed_float t))
+  | Naked_float _ -> Value (TD.create (Boxed_float (t, alloc_mode)))
   | Value _ | Naked_immediate _ | Naked_int32 _ | Naked_int64 _
-  | Naked_nativeint _ | Rec_info _ ->
+  | Naked_nativeint _ | Rec_info _ | Region _ ->
     Misc.fatal_errorf "Type of wrong kind for [box_float]: %a" print t
 
-let box_int32 (t : t) : t =
+let box_int32 (t : t) alloc_mode : t =
   match t with
-  | Naked_int32 _ -> Value (TD.create (Boxed_int32 t))
+  | Naked_int32 _ -> Value (TD.create (Boxed_int32 (t, alloc_mode)))
   | Value _ | Naked_immediate _ | Naked_float _ | Naked_int64 _
-  | Naked_nativeint _ | Rec_info _ ->
+  | Naked_nativeint _ | Rec_info _ | Region _ ->
     Misc.fatal_errorf "Type of wrong kind for [box_int32]: %a" print t
 
-let box_int64 (t : t) : t =
+let box_int64 (t : t) alloc_mode : t =
   match t with
-  | Naked_int64 _ -> Value (TD.create (Boxed_int64 t))
+  | Naked_int64 _ -> Value (TD.create (Boxed_int64 (t, alloc_mode)))
   | Value _ | Naked_immediate _ | Naked_float _ | Naked_int32 _
-  | Naked_nativeint _ | Rec_info _ ->
+  | Naked_nativeint _ | Rec_info _ | Region _ ->
     Misc.fatal_errorf "Type of wrong kind for [box_int64]: %a" print t
 
-let box_nativeint (t : t) : t =
+let box_nativeint (t : t) alloc_mode : t =
   match t with
-  | Naked_nativeint _ -> Value (TD.create (Boxed_nativeint t))
+  | Naked_nativeint _ -> Value (TD.create (Boxed_nativeint (t, alloc_mode)))
   | Value _ | Naked_immediate _ | Naked_float _ | Naked_int32 _ | Naked_int64 _
-  | Rec_info _ ->
+  | Rec_info _ | Region _ ->
     Misc.fatal_errorf "Type of wrong kind for [box_nativeint]: %a" print t
 
 let this_tagged_immediate imm : t =
@@ -2490,10 +2631,11 @@ let tag_immediate t : t =
          (Variant
             { is_unique = false;
               immediates = Known t;
-              blocks = Known Row_like_for_blocks.bottom
+              blocks = Known Row_like_for_blocks.bottom;
+              alloc_mode = Known Heap
             }))
   | Value _ | Naked_float _ | Naked_int32 _ | Naked_int64 _ | Naked_nativeint _
-  | Rec_info _ ->
+  | Rec_info _ | Region _ ->
     Misc.fatal_errorf "Type of wrong kind for [tag_immediate]: %a" print t
 
 let tagged_immediate_alias_to ~naked_immediate : t =
@@ -2555,38 +2697,19 @@ module Descr = struct
     | Naked_nativeint of
         head_of_kind_naked_nativeint TD.Descr.t Or_unknown_or_bottom.t
     | Rec_info of head_of_kind_rec_info TD.Descr.t Or_unknown_or_bottom.t
+    | Region of head_of_kind_region TD.Descr.t Or_unknown_or_bottom.t
 end
 
 let descr t : Descr.t =
   match t with
-  | Value ty ->
-    Value
-      (TD.descr ~apply_renaming_head:apply_renaming_head_of_kind_value
-         ~free_names_head:free_names_head_of_kind_value ty)
-  | Naked_immediate ty ->
-    Naked_immediate
-      (TD.descr ~apply_renaming_head:apply_renaming_head_of_kind_naked_immediate
-         ~free_names_head:free_names_head_of_kind_naked_immediate ty)
-  | Naked_float ty ->
-    Naked_float
-      (TD.descr ~apply_renaming_head:apply_renaming_head_of_kind_naked_float
-         ~free_names_head:free_names_head_of_kind_naked_float ty)
-  | Naked_int32 ty ->
-    Naked_int32
-      (TD.descr ~apply_renaming_head:apply_renaming_head_of_kind_naked_int32
-         ~free_names_head:free_names_head_of_kind_naked_int32 ty)
-  | Naked_int64 ty ->
-    Naked_int64
-      (TD.descr ~apply_renaming_head:apply_renaming_head_of_kind_naked_int64
-         ~free_names_head:free_names_head_of_kind_naked_int64 ty)
-  | Naked_nativeint ty ->
-    Naked_nativeint
-      (TD.descr ~apply_renaming_head:apply_renaming_head_of_kind_naked_nativeint
-         ~free_names_head:free_names_head_of_kind_naked_nativeint ty)
-  | Rec_info ty ->
-    Rec_info
-      (TD.descr ~apply_renaming_head:apply_renaming_head_of_kind_rec_info
-         ~free_names_head:free_names_head_of_kind_rec_info ty)
+  | Value ty -> Value (TD.descr ty)
+  | Naked_immediate ty -> Naked_immediate (TD.descr ty)
+  | Naked_float ty -> Naked_float (TD.descr ty)
+  | Naked_int32 ty -> Naked_int32 (TD.descr ty)
+  | Naked_int64 ty -> Naked_int64 (TD.descr ty)
+  | Naked_nativeint ty -> Naked_nativeint (TD.descr ty)
+  | Rec_info ty -> Rec_info (TD.descr ty)
+  | Region ty -> Region (TD.descr ty)
 
 let create_from_head_value head = Value (TD.create head)
 
@@ -2602,28 +2725,34 @@ let create_from_head_naked_nativeint head = Naked_nativeint (TD.create head)
 
 let create_from_head_rec_info head = Rec_info (TD.create head)
 
+let create_from_head_region head = Region (TD.create head)
+
 module Head_of_kind_value = struct
   type t = head_of_kind_value
 
-  let create_variant ~is_unique ~blocks ~immediates =
-    Variant { is_unique; blocks; immediates }
+  let create_variant ~is_unique ~blocks ~immediates alloc_mode =
+    Variant { is_unique; blocks; immediates; alloc_mode }
 
-  let create_boxed_float ty = Boxed_float ty
+  let create_mutable_block alloc_mode = Mutable_block { alloc_mode }
 
-  let create_boxed_int32 ty = Boxed_int32 ty
+  let create_boxed_float ty alloc_mode = Boxed_float (ty, alloc_mode)
 
-  let create_boxed_int64 ty = Boxed_int64 ty
+  let create_boxed_int32 ty alloc_mode = Boxed_int32 (ty, alloc_mode)
 
-  let create_boxed_nativeint ty = Boxed_nativeint ty
+  let create_boxed_int64 ty alloc_mode = Boxed_int64 (ty, alloc_mode)
+
+  let create_boxed_nativeint ty alloc_mode = Boxed_nativeint (ty, alloc_mode)
 
   let create_tagged_immediate imm : t =
     Variant
       { is_unique = false;
         immediates = Known (this_naked_immediate imm);
-        blocks = Known Row_like_for_blocks.bottom
+        blocks = Known Row_like_for_blocks.bottom;
+        alloc_mode = Known Heap
       }
 
-  let create_closures by_closure_id = Closures { by_closure_id }
+  let create_closures by_closure_id alloc_mode =
+    Closures { by_closure_id; alloc_mode }
 
   let create_string info = String info
 

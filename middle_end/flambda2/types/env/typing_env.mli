@@ -51,7 +51,11 @@ module Join_env : sig
 
   val right_join_env : t -> typing_env
 
-  val now_joining : t -> Simple.t -> Simple.t -> t
+  type now_joining_result =
+    | Continue of t
+    | Stop
+
+  val now_joining : t -> Simple.t -> Simple.t -> now_joining_result
 
   val already_joining : t -> Simple.t -> Simple.t -> bool
 end
@@ -173,7 +177,10 @@ val free_names_transitive : t -> Type_grammar.t -> Name_occurrences.t
 module Pre_serializable : sig
   type t
 
-  val create : typing_env -> used_closure_vars:Var_within_closure.Set.t -> t
+  val create :
+    typing_env ->
+    used_closure_vars:Var_within_closure.Set.t ->
+    t * (Simple.t -> Simple.t)
 
   val find_or_missing : t -> Name.t -> Type_grammar.t option
 end

@@ -28,6 +28,9 @@ let check_float_array_optimisation_enabled () =
       "[Pgenarray] is not expected when the float array optimisation is \
        disabled"
 
+let alloc_mode (mode : L.alloc_mode) : Alloc_mode.t =
+  match mode with Alloc_heap -> Heap | Alloc_local -> Local
+
 let rec value_kind (vk : L.value_kind) =
   match vk with
   | Pgenval -> KS.any_value
@@ -63,14 +66,15 @@ let inlined_attribute (attr : L.inlined_attribute) : Inlined_attribute.t =
   | Unroll i -> Unroll i
   | Default_inlined -> Default_inlined
 
-let kind_of_primitive_native_repr (repr : Primitive.native_repr) =
+let kind_of_primitive_native_repr
+    (repr : Primitive.mode * Primitive.native_repr) =
   match repr with
-  | Same_as_ocaml_repr -> K.value
-  | Unboxed_float -> K.naked_float
-  | Unboxed_integer Pnativeint -> K.naked_nativeint
-  | Unboxed_integer Pint32 -> K.naked_int32
-  | Unboxed_integer Pint64 -> K.naked_int64
-  | Untagged_int -> K.naked_immediate
+  | _, Same_as_ocaml_repr -> K.value
+  | _, Unboxed_float -> K.naked_float
+  | _, Unboxed_integer Pnativeint -> K.naked_nativeint
+  | _, Unboxed_integer Pint32 -> K.naked_int32
+  | _, Unboxed_integer Pint64 -> K.naked_int64
+  | _, Untagged_int -> K.naked_immediate
 
 let method_kind (kind : L.meth_kind) : Call_kind.method_kind =
   match kind with Self -> Self | Public -> Public | Cached -> Cached
@@ -188,6 +192,7 @@ let convert_init_or_assign (i_or_a : L.initialization_or_assignment) :
   | Heap_initialization -> Initialization
   | Root_initialization ->
     Misc.fatal_error "[Root_initialization] should not appear in Flambda input"
+  | Local_assignment -> Local_assignment
 
 type converted_array_kind =
   | Array_kind of P.Array_kind.t

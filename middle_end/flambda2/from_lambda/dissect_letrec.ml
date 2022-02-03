@@ -147,9 +147,11 @@ type letrec =
        allowed, for instance 'let rec a = let c = b in 1 :: b and b = 2 :: a'.
        The simplest way to handle those aliases is simply to apply a substitute
        of all these aliases afterward. *)
-    letbound : Ident.Set.t
-        (* Set of known immutable variables. Mutable ones cannot define
-           aliases *)
+    letbound : Ident.Set.t;
+    (* Set of known immutable variables. Mutable ones cannot define aliases *)
+    needs_region : bool
+        (* Set to [true] if the defining expressions of the [let rec] need to be
+           surrounded by a local allocation region. *)
   }
 
 type let_def =
@@ -216,10 +218,7 @@ let rec prepare_letrec (recursive_set : Ident.Set.t)
       { letrec with pre }
     | None -> dead_code lam letrec
   end
-  | Lprim
-      ( ((Pmakeblock _ | Pmakearray (_, _) | Pduprecord (_, _)) as prim),
-        args,
-        dbg )
+  | Lprim (((Pmakeblock _ | Pmakearray _ | Pduprecord _) as prim), args, dbg)
     when not (List.for_all is_simple args) ->
     (* If there are some non-trivial expressions as arguments, we first extract
        the arguments (to let-bound variables) before deconstructing. Arguments
@@ -247,14 +246,14 @@ let rec prepare_letrec (recursive_set : Ident.Set.t)
     in
     prepare_letrec recursive_set current_let lam letrec
   | Lprim (Pmakeblock _, args, _)
-  | Lprim (Pmakearray ((Paddrarray | Pintarray), _), args, _) -> begin
+  | Lprim (Pmakearray ((Paddrarray | Pintarray), _, _), args, _) -> begin
     match current_let with
     | Some cl -> build_block cl (List.length args) (Normal 0) lam letrec
     | None ->
       dead_code lam letrec
       (* We know that [args] are all "simple" at this point, so no effects *)
   end
-  | Lprim (Pmakearray (Pfloatarray, _), args, _)
+  | Lprim (Pmakearray (Pfloatarray, _, _), args, _)
   | Lprim (Pmakefloatblock _, args, _) -> begin
     match current_let with
     | Some cl -> build_block cl (List.length args) Boxed_float lam letrec
@@ -408,7 +407,8 @@ let rec prepare_letrec (recursive_set : Ident.Set.t)
                     effects;
                     functions;
                     substitution;
-                    letbound
+                    letbound;
+                    needs_region
                   } =
                 letrec
               in
@@ -420,7 +420,8 @@ let rec prepare_letrec (recursive_set : Ident.Set.t)
                   consts;
                   pre;
                   substitution;
-                  letbound
+                  letbound;
+                  needs_region
                 }
               in
               let inner_letrec =
@@ -428,7 +429,7 @@ let rec prepare_letrec (recursive_set : Ident.Set.t)
                   (Ident.Set.diff vars outer_vars)
                   (Some let_def) def inner_letrec
               in
-              ( { inner_letrec with effects; functions },
+              ( { inner_letrec with effects; functions; needs_region },
                 inner_letrec.effects :: inner_effects,
                 inner_letrec.functions @ inner_functions ))
           bindings (letrec, [], [])
@@ -486,8 +487,7 @@ let rec prepare_letrec (recursive_set : Ident.Set.t)
   | Lstaticcatch (_, _, _)
   | Ltrywith (_, _, _)
   | Lifthenelse (_, _, _)
-  | Lsend (_, _, _, _, _)
-  | Lvar _
+  | Lsend _ | Lvar _
   | Lprim (_, _, _) ->
     (* This cannot be recursive, otherwise it should have been caught by the
        well formedness check. Hence it is ok to evaluate it before anything
@@ -522,6 +522,9 @@ let rec prepare_letrec (recursive_set : Ident.Set.t)
       | None -> fun ~tail : Lambda.lambda -> Lsequence (lam, letrec.pre ~tail)
     in
     { letrec with pre }
+  | Lregion body ->
+    let letrec = prepare_letrec recursive_set current_let body letrec in
+    { letrec with needs_region = true }
 
 let dissect_letrec ~bindings ~body =
   let letbound = Ident.Set.of_list (List.map fst bindings) in
@@ -538,7 +541,8 @@ let dissect_letrec ~bindings ~body =
         effects = Lconst (Const_base (Const_int 0));
         functions = [];
         substitution = Ident.Map.empty;
-        letbound
+        letbound;
+        needs_region = false
       }
   in
 
@@ -554,6 +558,20 @@ let dissect_letrec ~bindings ~body =
         let size : lambda = Lconst (Const_base (Const_int size)) in
         id, Lprim (Pccall desc, [size], Loc_unknown))
       letrec.blocks
+  in
+
+  let real_body = body in
+  let bound_ids_freshening =
+    List.map (fun (bound_id, _) -> bound_id, Ident.rename bound_id) bindings
+    |> Ident.Map.of_list
+  in
+  let cont = next_raise_count () in
+  let body =
+    if not letrec.needs_region
+    then body
+    else
+      let args = List.map (fun (bound_id, _) -> Lvar bound_id) bindings in
+      Lstaticraise (cont, args)
   in
 
   let effects_then_body = lsequence (letrec.effects, body) in
@@ -579,7 +597,13 @@ let dissect_letrec ~bindings ~body =
   in
   let substituted = Lambda.rename letrec.substitution with_constants in
 
-  substituted
+  if not letrec.needs_region
+  then substituted
+  else
+    Lstaticcatch
+      ( Lregion (Lambda.rename bound_ids_freshening substituted),
+        (cont, List.map (fun (bound_id, _) -> bound_id, Pgenval) bindings),
+        real_body )
 
 type dissected =
   | Dissected of Lambda.lambda

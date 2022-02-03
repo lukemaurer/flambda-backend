@@ -35,7 +35,7 @@ type basic_block =
     mutable terminator : terminator instruction;
     mutable predecessors : Label.Set.t;
     mutable trap_depth : int;
-    mutable exns : Label.Set.t;
+    mutable exn : Label.t option;
     mutable can_raise : bool;
     mutable is_trap_handler : bool;
     mutable dead : bool
@@ -85,9 +85,15 @@ let successor_labels ~normal ~exn block =
   match normal, exn with
   | false, false -> Label.Set.empty
   | true, false -> successor_labels_normal block.terminator
-  | false, true -> block.exns
-  | true, true ->
-    Label.Set.union block.exns (successor_labels_normal block.terminator)
+  | false, true -> (
+    match block.exn with
+    | None -> Label.Set.empty
+    | Some label -> Label.Set.singleton label)
+  | true, true -> (
+    match block.exn with
+    | None -> successor_labels_normal block.terminator
+    | Some label ->
+      Label.Set.add label (successor_labels_normal block.terminator))
 
 let predecessor_labels block = Label.Set.elements block.predecessors
 
@@ -102,7 +108,7 @@ let replace_successor_labels t ~normal ~exn block ~f =
         dst;
     dst
   in
-  if exn then block.exns <- Label.Set.map f block.exns;
+  if exn then block.exn <- Option.map f block.exn;
   if normal
   then
     let desc =
@@ -221,6 +227,8 @@ let dump_op ppf = function
     Format.fprintf ppf "probe %s %s" name handler_code_sym
   | Probe_is_enabled { name } -> Format.fprintf ppf "probe_is_enabled %s" name
   | Opaque -> Format.fprintf ppf "opaque"
+  | Begin_region -> Format.fprintf ppf "beginregion"
+  | End_region -> Format.fprintf ppf "endregion"
   | Name_for_debugger _ -> Format.fprintf ppf "name_for_debugger"
 
 let dump_call ppf = function
@@ -319,6 +327,8 @@ let can_raise_operation : operation -> bool = function
   | Specific _ -> false (* CR xclerc for xclerc: double check *)
   | Opaque -> false
   | Name_for_debugger _ -> false
+  | Begin_region -> false
+  | End_region -> false
 
 let can_raise_basic : basic -> bool = function
   | Op op -> can_raise_operation op

@@ -1,4 +1,4 @@
-name: closure_cfg
+name: macos
 
 on: [push, pull_request]
 
@@ -8,12 +8,18 @@ jobs:
 
     strategy:
       matrix:
-        os: [ubuntu-latest]
+        os: [macos-latest]
 
     env:
       J: "3"
 
     steps:
+    - name: Install additional tools through brew
+      run: |
+        brew update
+        brew upgrade
+        brew install parallel
+
     - name: Checkout the Flambda backend repo
       uses: actions/checkout@master
       with:
@@ -58,16 +64,14 @@ jobs:
       working-directory: flambda_backend
       run: autoconf
 
-    - name: Configure Flambda backend (Closure mode)
+    - name: Configure Flambda backend (Flambda 2 mode)
       working-directory: flambda_backend
       run: |
         ./configure \
           --prefix=$GITHUB_WORKSPACE/_install \
-          --enable-middle-end=closure \
+          --enable-middle-end=flambda2 \
           --with-dune=$GITHUB_WORKSPACE/dune/dune.exe
 
-    - name: Build, install and test Flambda backend (Closure mode with ocamlcfg)
+    - name: Build, install and test Flambda backend (Flambda 2 mode)
       working-directory: flambda_backend
       run: make -j $J ci
-      env:
-        OCAMLPARAM: '_,ocamlcfg=1'

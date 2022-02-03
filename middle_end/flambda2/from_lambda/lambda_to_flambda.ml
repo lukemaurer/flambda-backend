@@ -76,6 +76,15 @@ module Env : sig
     t -> Continuation.t -> (Ident.t * Lambda.value_kind) list
 
   val get_mutable_variable : t -> Ident.t -> Ident.t
+
+  val entering_region : t -> Ident.t -> t
+
+  val innermost_region : t -> Ident.t
+
+  (** The innermost (newest) region is first in the list. *)
+  val region_stack : t -> Ident.t list
+
+  val region_stack_at_handler : t -> Continuation.t -> Ident.t list
 end = struct
   type t =
     { current_unit_id : Ident.t;
@@ -85,7 +94,9 @@ end = struct
       try_stack : Continuation.t list;
       try_stack_at_handler : Continuation.t list Continuation.Map.t;
       static_exn_continuation : Continuation.t Numeric_types.Int.Map.t;
-      recursive_static_catches : Numeric_types.Int.Set.t
+      recursive_static_catches : Numeric_types.Int.Set.t;
+      region_stack : Ident.t list;
+      region_stack_at_handler : Ident.t list Continuation.Map.t
     }
 
   let create ~current_unit_id ~return_continuation ~exn_continuation =
@@ -99,7 +110,9 @@ end = struct
       try_stack = [];
       try_stack_at_handler = Continuation.Map.empty;
       static_exn_continuation = Numeric_types.Int.Map.empty;
-      recursive_static_catches = Numeric_types.Int.Set.empty
+      recursive_static_catches = Numeric_types.Int.Set.empty;
+      region_stack = [];
+      region_stack_at_handler = Continuation.Map.empty
     }
 
   let current_unit_id t = t.current_unit_id
@@ -138,6 +151,9 @@ end = struct
 
   let add_continuation t cont ~push_to_try_stack (recursive : Asttypes.rec_flag)
       =
+    let new_region_stack_at_handler =
+      Continuation.Map.add cont t.region_stack t.region_stack_at_handler
+    in
     let body_env =
       let mutables_needed_by_continuations =
         Continuation.Map.add cont (mutables_in_scope t)
@@ -146,7 +162,16 @@ end = struct
       let try_stack =
         if push_to_try_stack then cont :: t.try_stack else t.try_stack
       in
-      { t with mutables_needed_by_continuations; try_stack }
+      let region_stack_at_handler =
+        match recursive with
+        | Nonrecursive -> t.region_stack_at_handler
+        | Recursive -> new_region_stack_at_handler
+      in
+      { t with
+        mutables_needed_by_continuations;
+        try_stack;
+        region_stack_at_handler
+      }
     in
     let current_values_of_mutables_in_scope =
       Ident.Map.mapi
@@ -162,7 +187,10 @@ end = struct
           then Misc.fatal_error "Try continuations should not be recursive";
           body_env
       in
-      { handler_env with current_values_of_mutables_in_scope }
+      { handler_env with
+        current_values_of_mutables_in_scope;
+        region_stack_at_handler = new_region_stack_at_handler
+      }
     in
     let extra_params =
       Ident.Map.data handler_env.current_values_of_mutables_in_scope
@@ -175,7 +203,9 @@ end = struct
         try_stack_at_handler =
           Continuation.Map.add cont t.try_stack t.try_stack_at_handler;
         static_exn_continuation =
-          Numeric_types.Int.Map.add static_exn cont t.static_exn_continuation
+          Numeric_types.Int.Map.add static_exn cont t.static_exn_continuation;
+        region_stack_at_handler =
+          Continuation.Map.add cont t.region_stack t.region_stack_at_handler
       }
     in
     let recursive : Asttypes.rec_flag =
@@ -237,6 +267,23 @@ end = struct
     | exception Not_found ->
       Misc.fatal_errorf "Mutable variable %a not bound in env" Ident.print id
     | id, _kind -> id
+
+  let entering_region t id = { t with region_stack = id :: t.region_stack }
+
+  let innermost_region t =
+    match t.region_stack with
+    | region :: _ -> region
+    | [] ->
+      Misc.fatal_error "Cannot get innermost region as no regions are open"
+
+  let region_stack t = t.region_stack
+
+  let region_stack_at_handler t continuation =
+    match Continuation.Map.find continuation t.region_stack_at_handler with
+    | exception Not_found ->
+      Misc.fatal_errorf "No region stack recorded for handler %a"
+        Continuation.print continuation
+    | stack -> stack
 end
 
 module CCenv = Closure_conversion_aux.Env
@@ -276,7 +323,8 @@ let _print_stack ppf stack =
     stack
 
 (* Uses of [Lstaticfail] that jump out of try-with handlers need special care:
-   the correct number of pop trap operations must be inserted. *)
+   the correct number of pop trap operations must be inserted. A similar thing
+   is also necessary for closing local allocation regions. *)
 let compile_staticfail acc env ccenv ~(continuation : Continuation.t) ~args :
     Acc.t * Expr_with_acc.t =
   let try_stack_at_handler = Env.get_try_stack_at_handler env continuation in
@@ -315,11 +363,46 @@ let compile_staticfail acc env ccenv ~(continuation : Continuation.t) ~args :
     | [], _ :: _ -> assert false
     (* see above *)
   in
-  let after_pop acc ccenv =
-    CC.close_apply_cont acc ccenv continuation None args
+  let region_stack_at_handler = Env.region_stack_at_handler env continuation in
+  let region_stack_now = Env.region_stack env in
+  if List.length region_stack_at_handler > List.length region_stack_now
+  then
+    Misc.fatal_errorf
+      "Cannot jump to continuation %a: it would involve jumping into a local \
+       allocation region"
+      Continuation.print continuation;
+  assert (
+    Ident.Set.subset
+      (Ident.Set.of_list region_stack_at_handler)
+      (Ident.Set.of_list region_stack_now));
+  let rec add_end_regions acc ~region_stack_now =
+    let add_end_region region ~region_stack_now after_everything =
+      let add_remaining_end_regions acc =
+        add_end_regions acc ~region_stack_now
+      in
+      let body = add_remaining_end_regions acc after_everything in
+      fun acc ccenv ->
+        CC.close_let acc ccenv
+          (Ident.create_local "unit")
+          Not_user_visible (End_region region) ~body
+    in
+    let no_end_region after_everything = after_everything in
+    match region_stack_now, region_stack_at_handler with
+    | [], [] -> no_end_region
+    | region1 :: region_stack_now, region2 :: _ ->
+      if Ident.same region1 region2
+      then no_end_region
+      else add_end_region region1 ~region_stack_now
+    | region :: region_stack_now, [] -> add_end_region region ~region_stack_now
+    | [], _ :: _ -> assert false
+    (* see above *)
   in
-  let mk_poptraps = add_pop_traps acc ~try_stack_now after_pop in
-  mk_poptraps acc ccenv
+  add_pop_traps acc ~try_stack_now
+    (fun acc ccenv ->
+      add_end_regions acc ~region_stack_now
+        (fun acc ccenv -> CC.close_apply_cont acc ccenv continuation None args)
+        acc ccenv)
+    acc ccenv
 
 let switch_for_if_then_else ~cond ~ifso ~ifnot =
   (* CR mshinwell: We need to make sure that [cond] is {0, 1}-valued. The
@@ -375,10 +458,12 @@ let transform_primitive env (prim : L.primitive) args loc =
     let ident = Ident.create_local "ignore" in
     let result = L.Lconst (Const_base (Const_int 0)) in
     Transformed (L.Llet (Strict, Pgenval, ident, arg, result))
-  | Pdirapply, [funct; arg] | Prevapply, [arg; funct] ->
+  | Pdirapply pos, [funct; arg] | Prevapply pos, [arg; funct] ->
     let apply : L.lambda_apply =
       { ap_func = funct;
         ap_args = [arg];
+        ap_region_close = pos;
+        ap_mode = Alloc_heap;
         ap_loc = loc;
         ap_tailcall = Default_tailcall;
         (* CR-someday lwhite: it would be nice to be able to give inlined
@@ -399,13 +484,13 @@ let transform_primitive env (prim : L.primitive) args loc =
       "[Psetfield (Pgetglobal ...)] is forbidden upon entry to the middle end"
   | Pfield (index, _), _ when index < 0 ->
     Misc.fatal_error "Pfield with negative field index"
-  | Pfloatfield (i, _), _ when i < 0 ->
+  | Pfloatfield (i, _, _), _ when i < 0 ->
     Misc.fatal_error "Pfloatfield with negative field index"
   | Psetfield (index, _, _), _ when index < 0 ->
     Misc.fatal_error "Psetfield with negative field index"
-  | Pmakeblock (tag, _, _), _ when tag < 0 || tag >= Obj.no_scan_tag ->
+  | Pmakeblock (tag, _, _, _), _ when tag < 0 || tag >= Obj.no_scan_tag ->
     Misc.fatal_errorf "Pmakeblock with wrong or non-scannable block tag %d" tag
-  | Pmakefloatblock _mut, args when List.length args < 1 ->
+  | Pmakefloatblock (_mut, _mode), args when List.length args < 1 ->
     Misc.fatal_errorf "Pmakefloatblock must have at least one argument"
   | Pfloatcomp CFnlt, args ->
     Primitive (L.Pnot, [L.Lprim (Pfloatcomp CFlt, args, loc)], loc)
@@ -571,17 +656,17 @@ let primitive_can_raise (prim : Lambda.primitive) =
   | Pccall _ | Praise _ | Parrayrefs _ | Parraysets _ | Pmodint _ | Pdivint _
   | Pstringrefs | Pbytesrefs | Pbytessets
   | Pstring_load_16 false
-  | Pstring_load_32 false
-  | Pstring_load_64 false
+  | Pstring_load_32 (false, _)
+  | Pstring_load_64 (false, _)
   | Pbytes_load_16 false
-  | Pbytes_load_32 false
-  | Pbytes_load_64 false
+  | Pbytes_load_32 (false, _)
+  | Pbytes_load_64 (false, _)
   | Pbytes_set_16 false
   | Pbytes_set_32 false
   | Pbytes_set_64 false
   | Pbigstring_load_16 false
-  | Pbigstring_load_32 false
-  | Pbigstring_load_64 false
+  | Pbigstring_load_32 (false, _)
+  | Pbigstring_load_64 (false, _)
   | Pbigstring_set_16 false
   | Pbigstring_set_32 false
   | Pbigstring_set_64 false
@@ -596,40 +681,43 @@ let primitive_can_raise (prim : Lambda.primitive) =
   | Pbigarrayref (_, _, _, Pbigarray_unknown_layout)
   | Pbigarrayset (_, _, _, Pbigarray_unknown_layout) ->
     true
-  | Pidentity | Pbytes_to_string | Pbytes_of_string | Pignore | Prevapply
-  | Pdirapply | Pgetglobal _ | Psetglobal _ | Pmakeblock _ | Pmakefloatblock _
+  | Pidentity | Pbytes_to_string | Pbytes_of_string | Pignore | Prevapply _
+  | Pdirapply _ | Pgetglobal _ | Psetglobal _ | Pmakeblock _ | Pmakefloatblock _
   | Pfield _ | Pfield_computed _ | Psetfield _ | Psetfield_computed _
   | Pfloatfield _ | Psetfloatfield _ | Pduprecord _ | Psequand | Psequor | Pnot
   | Pnegint | Paddint | Psubint | Pmulint | Pandint | Porint | Pxorint | Plslint
   | Plsrint | Pasrint | Pintcomp _ | Pcompare_ints | Pcompare_floats
-  | Pcompare_bints _ | Poffsetint _ | Poffsetref _ | Pintoffloat | Pfloatofint
-  | Pnegfloat | Pabsfloat | Paddfloat | Psubfloat | Pmulfloat | Pdivfloat
-  | Pfloatcomp _ | Pstringlength | Pstringrefu | Pbyteslength | Pbytesrefu
-  | Pbytessetu | Pmakearray _ | Pduparray _ | Parraylength _ | Parrayrefu _
-  | Parraysetu _ | Pisint | Pisout | Pbintofint _ | Pintofbint _ | Pcvtbint _
-  | Pnegbint _ | Paddbint _ | Psubbint _ | Pmulbint _ | Pdivbint _ | Pmodbint _
-  | Pandbint _ | Porbint _ | Pxorbint _ | Plslbint _ | Plsrbint _ | Pasrbint _
-  | Pbintcomp _ | Pbigarraydim _
+  | Pcompare_bints _ | Poffsetint _ | Poffsetref _ | Pintoffloat | Pfloatofint _
+  | Pnegfloat _ | Pabsfloat _ | Paddfloat _ | Psubfloat _ | Pmulfloat _
+  | Pdivfloat _ | Pfloatcomp _ | Pstringlength | Pstringrefu | Pbyteslength
+  | Pbytesrefu | Pbytessetu | Pmakearray _ | Pduparray _ | Parraylength _
+  | Parrayrefu _ | Parraysetu _ | Pisint | Pisout | Pbintofint _ | Pintofbint _
+  | Pcvtbint _ | Pnegbint _ | Paddbint _ | Psubbint _ | Pmulbint _ | Pdivbint _
+  | Pmodbint _ | Pandbint _ | Porbint _ | Pxorbint _ | Plslbint _ | Plsrbint _
+  | Pasrbint _ | Pbintcomp _ | Pbigarraydim _
   | Pbigarrayref (true, _, _, _)
   | Pbigarrayset (true, _, _, _)
   | Pstring_load_16 true
-  | Pstring_load_32 true
-  | Pstring_load_64 true
+  | Pstring_load_32 (true, _)
+  | Pstring_load_64 (true, _)
   | Pbytes_load_16 true
-  | Pbytes_load_32 true
-  | Pbytes_load_64 true
+  | Pbytes_load_32 (true, _)
+  | Pbytes_load_64 (true, _)
   | Pbytes_set_16 true
   | Pbytes_set_32 true
   | Pbytes_set_64 true
   | Pbigstring_load_16 true
-  | Pbigstring_load_32 true
-  | Pbigstring_load_64 true
+  | Pbigstring_load_32 (true, _)
+  | Pbigstring_load_64 (true, _)
   | Pbigstring_set_16 true
   | Pbigstring_set_32 true
   | Pbigstring_set_64 true
   | Pctconst _ | Pbswap16 | Pbbswap _ | Pint_as_pointer | Popaque
   | Pprobe_is_enabled _ ->
     false
+
+(* CR mshinwell: Make sure that [Apply] terms in tail position jump directly to
+   the return continuation rather than relying on a wrapper to be removed. *)
 
 let rec cps_non_tail acc env ccenv (lam : L.lambda)
     (k : Acc.t -> Env.t -> CCenv.t -> Ident.t -> Acc.t * Expr_with_acc.t)
@@ -648,12 +736,21 @@ let rec cps_non_tail acc env ccenv (lam : L.lambda)
   | Lapply
       { ap_func;
         ap_args;
+        ap_region_close;
+        ap_mode;
         ap_loc;
         ap_tailcall;
         ap_inlined;
         ap_specialised;
         ap_probe
       } ->
+    (* It is important that any necessary [End_region] marker (from a
+       surrounding [Lregion]) is inserted before the tail call! *)
+    let need_end_region =
+      match ap_region_close with
+      | Rc_normal -> false
+      | Rc_close_at_apply -> true
+    in
     cps_non_tail_list acc env ccenv ap_args
       (fun acc env ccenv args ->
         cps_non_tail acc env ccenv ap_func
@@ -678,10 +775,20 @@ let rec cps_non_tail acc env ccenv (lam : L.lambda)
                     tailcall = ap_tailcall;
                     inlined = ap_inlined;
                     specialised = ap_specialised;
-                    probe = ap_probe
+                    probe = ap_probe;
+                    mode = ap_mode
                   }
                 in
-                wrap_return_continuation acc env ccenv apply)
+                if not need_end_region
+                then wrap_return_continuation acc env ccenv apply
+                else
+                  (* CR vlaviron: Need to close all regions, or equivalently the
+                     outermost one *)
+                  let region = Env.innermost_region env in
+                  CC.close_let acc ccenv (Ident.create_local "unit")
+                    Not_user_visible (End_region region) ~body:(fun acc ccenv ->
+                      let acc = Acc.add_region_closed_early acc region in
+                      wrap_return_continuation acc env ccenv apply))
               ~handler:(fun acc env ccenv -> k acc env ccenv result_var))
           k_exn)
       k_exn
@@ -832,7 +939,11 @@ let rec cps_non_tail acc env ccenv (lam : L.lambda)
         CC.close_let_cont acc ccenv ~name:continuation ~is_exn_handler:false
           ~params ~recursive ~body ~handler)
       ~handler:(fun acc env ccenv -> k acc env ccenv result_var)
-  | Lsend (meth_kind, meth, obj, args, loc) ->
+  | Lsend (meth_kind, meth, obj, args, pos, mode, loc) ->
+    (* See comments in the [Lapply] case above. *)
+    let need_end_region =
+      match pos with Rc_normal -> false | Rc_close_at_apply -> true
+    in
     cps_non_tail_simple acc env ccenv obj
       (fun acc env ccenv obj ->
         cps_non_tail acc env ccenv meth
@@ -859,10 +970,21 @@ let rec cps_non_tail acc env ccenv (lam : L.lambda)
                         tailcall = Default_tailcall;
                         inlined = Default_inlined;
                         specialised = Default_specialise;
-                        probe = None
+                        probe = None;
+                        mode
                       }
                     in
-                    wrap_return_continuation acc env ccenv apply)
+                    if not need_end_region
+                    then wrap_return_continuation acc env ccenv apply
+                    else
+                      (* CR vlaviron: Need to close all regions, or equivalently
+                         the outermost one *)
+                      let region = Env.innermost_region env in
+                      CC.close_let acc ccenv (Ident.create_local "unit")
+                        Not_user_visible (End_region region)
+                        ~body:(fun acc ccenv ->
+                          let acc = Acc.add_region_closed_early acc region in
+                          wrap_return_continuation acc env ccenv apply))
                   ~handler:(fun acc env ccenv -> k acc env ccenv result_var))
               k_exn)
           k_exn)
@@ -870,33 +992,47 @@ let rec cps_non_tail acc env ccenv (lam : L.lambda)
   | Ltrywith (body, id, handler) ->
     let body_result = Ident.create_local "body_result" in
     let result_var = Ident.create_local "try_with_result" in
-    let_cont_nonrecursive_with_extra_params acc env ccenv ~is_exn_handler:false
-      ~params:[result_var, Not_user_visible, Pgenval]
-      ~body:(fun acc env ccenv after_continuation ->
+    let region = Ident.create_local "try_region" in
+    (* As for all other constructs, the OCaml type checker and the Lambda
+       generation pass ensures that there will be an enclosing region around the
+       whole [Ltrywith] (possibly not immediately enclosing, but maybe further
+       out). The only reason we need a [Begin_region] here is to be able to
+       unwind the local allocation stack if the exception handler is invoked.
+       (This also explains why there is no [End_region] at the end of the "try"
+       body.) *)
+    CC.close_let acc ccenv region Not_user_visible Begin_region
+      ~body:(fun acc ccenv ->
         let_cont_nonrecursive_with_extra_params acc env ccenv
-          ~is_exn_handler:true
-          ~params:[id, User_visible, Pgenval]
-          ~body:(fun acc env ccenv handler_continuation ->
+          ~is_exn_handler:false
+          ~params:[result_var, Not_user_visible, Pgenval]
+          ~body:(fun acc env ccenv after_continuation ->
             let_cont_nonrecursive_with_extra_params acc env ccenv
-              ~is_exn_handler:false
-              ~params:[body_result, Not_user_visible, Pgenval]
-              ~body:(fun acc env ccenv poptrap_continuation ->
+              ~is_exn_handler:true
+              ~params:[id, User_visible, Pgenval]
+              ~body:(fun acc env ccenv handler_continuation ->
                 let_cont_nonrecursive_with_extra_params acc env ccenv
-                  ~is_exn_handler:false ~params:[]
-                  ~body:(fun acc env ccenv body_continuation ->
-                    apply_cont_with_extra_args acc env ccenv body_continuation
-                      (Some (IR.Push { exn_handler = handler_continuation }))
-                      [])
+                  ~is_exn_handler:false
+                  ~params:[body_result, Not_user_visible, Pgenval]
+                  ~body:(fun acc env ccenv poptrap_continuation ->
+                    let_cont_nonrecursive_with_extra_params acc env ccenv
+                      ~is_exn_handler:false ~params:[]
+                      ~body:(fun acc env ccenv body_continuation ->
+                        apply_cont_with_extra_args acc env ccenv
+                          body_continuation
+                          (Some (IR.Push { exn_handler = handler_continuation }))
+                          [])
+                      ~handler:(fun acc env ccenv ->
+                        cps_tail acc env ccenv body poptrap_continuation
+                          handler_continuation))
                   ~handler:(fun acc env ccenv ->
-                    cps_tail acc env ccenv body poptrap_continuation
-                      handler_continuation))
+                    apply_cont_with_extra_args acc env ccenv after_continuation
+                      (Some (IR.Pop { exn_handler = handler_continuation }))
+                      [IR.Var body_result]))
               ~handler:(fun acc env ccenv ->
-                apply_cont_with_extra_args acc env ccenv after_continuation
-                  (Some (IR.Pop { exn_handler = handler_continuation }))
-                  [IR.Var body_result]))
-          ~handler:(fun acc env ccenv ->
-            cps_tail acc env ccenv handler after_continuation k_exn))
-      ~handler:(fun acc env ccenv -> k acc env ccenv result_var)
+                CC.close_let acc ccenv (Ident.create_local "unit")
+                  Not_user_visible (End_region region) ~body:(fun acc ccenv ->
+                    cps_tail acc env ccenv handler after_continuation k_exn)))
+          ~handler:(fun acc env ccenv -> k acc env ccenv result_var))
   | Lifthenelse (cond, ifso, ifnot) ->
     let lam = switch_for_if_then_else ~cond ~ifso ~ifnot in
     cps_non_tail acc env ccenv lam k k_exn
@@ -933,6 +1069,20 @@ let rec cps_non_tail acc env ccenv (lam : L.lambda)
        by completely removing it (replacing by unit). *)
     Misc.fatal_error
       "[Lifused] should have been removed by [Simplif.simplify_lets]"
+  | Lregion body ->
+    let region = Ident.create_local "region" in
+    CC.close_let acc ccenv region Not_user_visible Begin_region
+      ~body:(fun acc ccenv ->
+        let env = Env.entering_region env region in
+        cps_non_tail acc env ccenv body
+          (fun acc env ccenv result ->
+            if Acc.region_closed_early acc region
+            then k acc env ccenv result
+            else
+              CC.close_let acc ccenv (Ident.create_local "unit")
+                Not_user_visible (End_region region) ~body:(fun acc ccenv ->
+                  k acc env ccenv result))
+          k_exn)
 
 and cps_non_tail_simple acc env ccenv (lam : L.lambda)
     (k : Acc.t -> Env.t -> CCenv.t -> IR.simple -> Acc.t * Expr_with_acc.t)
@@ -944,7 +1094,7 @@ and cps_non_tail_simple acc env ccenv (lam : L.lambda)
   | Lapply _ | Lfunction _ | Llet _ | Lletrec _ | Lprim _ | Lswitch _
   | Lstringswitch _ | Lstaticraise _ | Lstaticcatch _ | Ltrywith _
   | Lifthenelse _ | Lsequence _ | Lwhile _ | Lfor _ | Lassign _ | Lsend _
-  | Levent _ | Lifused _ ->
+  | Levent _ | Lifused _ | Lregion _ ->
     cps_non_tail acc env ccenv lam
       (fun acc env ccenv id -> k acc env ccenv (IR.Var id))
       k_exn
@@ -961,10 +1111,25 @@ and cps_tail acc env ccenv (lam : L.lambda) (k : Continuation.t)
     else apply_cont_with_extra_args acc env ccenv k None [IR.Var id]
   | Lconst const ->
     name_then_cps_tail acc env ccenv "const" (IR.Simple (Const const)) k k_exn
-  | Lapply apply ->
-    cps_non_tail_list acc env ccenv apply.ap_args
+  | Lapply
+      { ap_func;
+        ap_args;
+        ap_region_close;
+        ap_mode;
+        ap_loc;
+        ap_tailcall;
+        ap_inlined;
+        ap_specialised;
+        ap_probe
+      } ->
+    let need_end_region =
+      match ap_region_close with
+      | Rc_normal -> false
+      | Rc_close_at_apply -> true
+    in
+    cps_non_tail_list acc env ccenv ap_args
       (fun acc env ccenv args ->
-        cps_non_tail acc env ccenv apply.ap_func
+        cps_non_tail acc env ccenv ap_func
           (fun acc env ccenv func ->
             let exn_continuation : IR.exn_continuation =
               { exn_handler = k_exn;
@@ -977,14 +1142,24 @@ and cps_tail acc env ccenv (lam : L.lambda) (k : Continuation.t)
                 continuation = k;
                 exn_continuation;
                 args;
-                loc = apply.ap_loc;
-                tailcall = apply.ap_tailcall;
-                inlined = apply.ap_inlined;
-                specialised = apply.ap_specialised;
-                probe = apply.ap_probe
+                loc = ap_loc;
+                tailcall = ap_tailcall;
+                inlined = ap_inlined;
+                specialised = ap_specialised;
+                probe = ap_probe;
+                mode = ap_mode
               }
             in
-            wrap_return_continuation acc env ccenv apply)
+            if not need_end_region
+            then wrap_return_continuation acc env ccenv apply
+            else
+              (* CR vlaviron: Need to close all regions, or equivalently the
+                 outermost one *)
+              let region = Env.innermost_region env in
+              CC.close_let acc ccenv (Ident.create_local "unit")
+                Not_user_visible (End_region region) ~body:(fun acc ccenv ->
+                  let acc = Acc.add_region_closed_early acc region in
+                  wrap_return_continuation acc env ccenv apply))
           k_exn)
       k_exn
   | Lfunction func ->
@@ -1143,7 +1318,10 @@ and cps_tail acc env ccenv (lam : L.lambda) (k : Continuation.t)
     in
     CC.close_let_cont acc ccenv ~name:continuation ~is_exn_handler:false ~params
       ~recursive ~body ~handler
-  | Lsend (meth_kind, meth, obj, args, loc) ->
+  | Lsend (meth_kind, meth, obj, args, pos, mode, loc) ->
+    let need_end_region =
+      match pos with Rc_normal -> false | Rc_close_at_apply -> true
+    in
     cps_non_tail_simple acc env ccenv obj
       (fun acc env ccenv obj ->
         cps_non_tail acc env ccenv meth
@@ -1165,10 +1343,20 @@ and cps_tail acc env ccenv (lam : L.lambda) (k : Continuation.t)
                     tailcall = Default_tailcall;
                     inlined = Default_inlined;
                     specialised = Default_specialise;
-                    probe = None
+                    probe = None;
+                    mode
                   }
                 in
-                wrap_return_continuation acc env ccenv apply)
+                if not need_end_region
+                then wrap_return_continuation acc env ccenv apply
+                else
+                  (* CR vlaviron: Need to close all regions, or equivalently the
+                     outermost one *)
+                  let region = Env.innermost_region env in
+                  CC.close_let acc ccenv (Ident.create_local "unit")
+                    Not_user_visible (End_region region) ~body:(fun acc ccenv ->
+                      let acc = Acc.add_region_closed_early acc region in
+                      wrap_return_continuation acc env ccenv apply))
               k_exn)
           k_exn)
       k_exn
@@ -1188,27 +1376,34 @@ and cps_tail acc env ccenv (lam : L.lambda) (k : Continuation.t)
       k_exn
   | Ltrywith (body, id, handler) ->
     let body_result = Ident.create_local "body_result" in
-    let_cont_nonrecursive_with_extra_params acc env ccenv ~is_exn_handler:true
-      ~params:[id, User_visible, Pgenval]
-      ~body:(fun acc env ccenv handler_continuation ->
+    let region = Ident.create_local "try_region" in
+    CC.close_let acc ccenv region Not_user_visible Begin_region
+      ~body:(fun acc ccenv ->
         let_cont_nonrecursive_with_extra_params acc env ccenv
-          ~is_exn_handler:false
-          ~params:[body_result, Not_user_visible, Pgenval]
-          ~body:(fun acc env ccenv poptrap_continuation ->
+          ~is_exn_handler:true
+          ~params:[id, User_visible, Pgenval]
+          ~body:(fun acc env ccenv handler_continuation ->
             let_cont_nonrecursive_with_extra_params acc env ccenv
-              ~is_exn_handler:false ~params:[]
-              ~body:(fun acc env ccenv body_continuation ->
-                apply_cont_with_extra_args acc env ccenv body_continuation
-                  (Some (IR.Push { exn_handler = handler_continuation }))
-                  [])
+              ~is_exn_handler:false
+              ~params:[body_result, Not_user_visible, Pgenval]
+              ~body:(fun acc env ccenv poptrap_continuation ->
+                let_cont_nonrecursive_with_extra_params acc env ccenv
+                  ~is_exn_handler:false ~params:[]
+                  ~body:(fun acc env ccenv body_continuation ->
+                    apply_cont_with_extra_args acc env ccenv body_continuation
+                      (Some (IR.Push { exn_handler = handler_continuation }))
+                      [])
+                  ~handler:(fun acc env ccenv ->
+                    cps_tail acc env ccenv body poptrap_continuation
+                      handler_continuation))
               ~handler:(fun acc env ccenv ->
-                cps_tail acc env ccenv body poptrap_continuation
-                  handler_continuation))
+                apply_cont_with_extra_args acc env ccenv k
+                  (Some (IR.Pop { exn_handler = handler_continuation }))
+                  [IR.Var body_result]))
           ~handler:(fun acc env ccenv ->
-            apply_cont_with_extra_args acc env ccenv k
-              (Some (IR.Pop { exn_handler = handler_continuation }))
-              [IR.Var body_result]))
-      ~handler:(fun acc env ccenv -> cps_tail acc env ccenv handler k k_exn)
+            CC.close_let acc ccenv (Ident.create_local "unit")
+              Not_user_visible (End_region region) ~body:(fun acc ccenv ->
+                cps_tail acc env ccenv handler k k_exn)))
   | Lifthenelse (cond, ifso, ifnot) ->
     let lam = switch_for_if_then_else ~cond ~ifso ~ifnot in
     cps_tail acc env ccenv lam k k_exn
@@ -1229,6 +1424,20 @@ and cps_tail acc env ccenv (lam : L.lambda) (k : Continuation.t)
        by completely removing it (replacing by unit). *)
     Misc.fatal_error
       "[Lifused] should have been removed by [Simplif.simplify_lets]"
+  | Lregion body ->
+    let region = Ident.create_local "region" in
+    CC.close_let acc ccenv region Not_user_visible Begin_region
+      ~body:(fun acc ccenv ->
+        let env = Env.entering_region env region in
+        cps_non_tail acc env ccenv body
+          (fun acc env ccenv result ->
+            if Acc.region_closed_early acc region
+            then cps_tail acc env ccenv (L.Lvar result) k k_exn
+            else
+              CC.close_let acc ccenv (Ident.create_local "unit")
+                Not_user_visible (End_region region) ~body:(fun acc ccenv ->
+                  cps_tail acc env ccenv (L.Lvar result) k k_exn))
+          k_exn)
 
 and name_then_cps_non_tail acc env ccenv name defining_expr k _k_exn :
     Acc.t * Expr_with_acc.t =
@@ -1269,11 +1478,12 @@ and cps_function_bindings env (bindings : (Ident.t * L.lambda) list) =
     List.map
       (fun (fun_id, binding) ->
         match binding with
-        | L.Lfunction { kind; params; body = fbody; attr; loc; return; _ } ->
-          begin
+        | L.Lfunction
+            { kind; params; body = fbody; attr; loc; mode; region; return; _ }
+          -> begin
           match
             Simplif.split_default_wrapper ~id:fun_id ~kind ~params ~body:fbody
-              ~return ~attr ~loc
+              ~return ~attr ~loc ~mode ~region
           with
           | ([(_, L.Lfunction _)] | [(_, L.Lfunction _); (_, L.Lfunction _)]) as
             binding ->
@@ -1358,8 +1568,11 @@ and cps_function_bindings env (bindings : (Ident.t * L.lambda) list) =
     [] bindings_with_wrappers
 
 and cps_function env ~fid ~stub ~(recursive : Recursive.t) ?free_idents
-    ({ kind; params; return; body; attr; loc } : L.lfunction) : Function_decl.t
-    =
+    ({ kind; params; return; body; attr; loc; mode; region } : L.lfunction) :
+    Function_decl.t =
+  let num_trailing_local_params =
+    match kind with Curried { nlocal } -> nlocal | Tupled -> 0
+  in
   let body_cont = Continuation.create ~sort:Return () in
   let body_exn_cont = Continuation.create () in
   let free_idents_of_body =
@@ -1384,7 +1597,8 @@ and cps_function env ~fid ~stub ~(recursive : Recursive.t) ?free_idents
   in
   Function_decl.create ~let_rec_ident:(Some fid) ~closure_id ~kind ~params
     ~return ~return_continuation:body_cont ~exn_continuation ~body ~attr ~loc
-    ~free_idents_of_body ~stub recursive
+    ~free_idents_of_body ~stub recursive ~closure_alloc_mode:mode
+    ~num_trailing_local_params ~contains_no_escaping_local_allocs:region
 
 and cps_switch acc env ccenv (switch : L.lambda_switch) ~scrutinee
     (k : Continuation.t) (k_exn : Continuation.t) : Acc.t * Expr_with_acc.t =
@@ -1446,7 +1660,7 @@ and cps_switch acc env ccenv (switch : L.lambda_switch) ~scrutinee
         | Lapply _ | Lfunction _ | Llet _ | Lletrec _ | Lprim _ | Lswitch _
         | Lstringswitch _ | Lstaticraise _ | Lstaticcatch _ | Ltrywith _
         | Lifthenelse _ | Lsequence _ | Lwhile _ | Lfor _ | Lassign _ | Lsend _
-        | Levent _ | Lifused _ ->
+        | Levent _ | Lifused _ | Lregion _ ->
           (* The continuations created here (and for failactions) are local and
              their bodies will not modify mutable variables. Hence, it is safe
              to exclude them from passing along the extra arguments for mutable

@@ -247,7 +247,9 @@ _build_upstream/config.status: ocaml/configure.ac
 
 .PHONY: build_upstream
 build_upstream: _build_upstream/config.status
-	rsync -a $$(pwd)/ocaml/ $$(pwd)/_build_upstream
+	rsync -a \
+	  --filter=':- $$(pwd)/ocaml/.gitignore' \
+		$$(pwd)/ocaml/ $$(pwd)/_build_upstream
 	(cd _build_upstream && \
 	    $(MAKE) world.opt && \
 	    $(MAKE) ocamlnat)
@@ -449,7 +451,11 @@ runtest-upstream:
 	cp $(stage1_build)/ocaml/tools/cmpbyt.bc _runtest/tools/cmpbyt
 	# We should build the native ocamltest too.
 	cp $(stage1_build)/ocaml/ocamltest/ocamltest.byte _runtest/ocamltest/ocamltest
-	grep -v '^#' testsuite/flambda2-test-list > _runtest/flambda2-test-list
+	for dir in `cd ocaml/testsuite; ls -1 -d tests/*`; do \
+	  if ! grep -q "^  $$dir " testsuite/flambda2-test-list; then \
+	    echo "  $$dir"; \
+	  fi; \
+	done > _runtest/flambda2-test-list
 	(export OCAMLSRCDIR=$$(pwd)/_runtest; \
 	 export CAML_LD_LIBRARY_PATH=$$(pwd)/_runtest/lib/ocaml/stublibs; \
 	 cd _runtest/testsuite \

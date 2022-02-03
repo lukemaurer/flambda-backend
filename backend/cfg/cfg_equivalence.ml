@@ -28,7 +28,7 @@ module type State = sig
 
   val add_labels_to_check : t -> location -> Label.t -> Label.t -> unit
 
-  val add_label_sets_to_check :
+  val _add_label_sets_to_check :
     t -> location -> Label.Set.t -> Label.Set.t -> unit
 
   val check : t -> Cfg.t -> unit
@@ -107,7 +107,7 @@ module Make_state (C : Container) : State = struct
   let add_labels_to_check t location lbl1 lbl2 =
     t.labels_to_check <- (location, lbl1, lbl2) :: t.labels_to_check
 
-  let add_label_sets_to_check t location set1 set2 =
+  let _add_label_sets_to_check t location set1 set2 =
     t.label_sets_to_check <- (location, set1, set2) :: t.label_sets_to_check
 
   let check_label t cfg location lbl1 lbl2 =
@@ -250,6 +250,8 @@ let check_operation : location -> Cfg.operation -> Cfg.operation -> unit =
     when Arch.equal_specific_operation expected_spec result_spec ->
     ()
   | Opaque, Opaque -> ()
+  | Begin_region, Begin_region -> ()
+  | End_region, End_region -> ()
   | ( Name_for_debugger
         { ident = left_ident;
           which_parameter = left_which_parameter;
@@ -276,9 +278,16 @@ let check_prim_call_operation :
   match expected, result with
   | External expected, External result ->
     check_external_call_operation location expected result
-  | ( Alloc { bytes = expected_bytes; dbginfo = _expected_dbginfo },
-      Alloc { bytes = result_bytes; dbginfo = _result_dbginfo } )
-    when Int.equal expected_bytes result_bytes ->
+  | ( Alloc
+        { bytes = expected_bytes;
+          dbginfo = _expected_dbginfo;
+          mode = expected_mode
+        },
+      Alloc
+        { bytes = result_bytes; dbginfo = _result_dbginfo; mode = result_mode }
+    )
+    when Int.equal expected_bytes result_bytes
+         && Lambda.eq_mode expected_mode result_mode ->
     (* CR xclerc for xclerc: also check debug info *)
     ()
   | ( Checkbound { immediate = expected_immediate },
@@ -500,9 +509,13 @@ let check_basic_block : State.t -> Cfg.basic_block -> Cfg.basic_block -> unit =
   then begin
     if not (Int.equal expected.trap_depth result.trap_depth)
     then different location "trap depth";
-    State.add_label_sets_to_check state
-      (location ^ " (exceptional successors)")
-      expected.exns result.exns
+    let location = location ^ " (exceptional successors)" in
+    match expected.exn, result.exn with
+    | None, None -> ()
+    | None, Some _ -> different location "unexpected successor"
+    | Some _, None -> different location "missing successor"
+    | Some expected, Some result ->
+      State.add_labels_to_check state location expected result
   end;
   if not (Bool.equal expected.can_raise result.can_raise)
   then different location "can_raise";
