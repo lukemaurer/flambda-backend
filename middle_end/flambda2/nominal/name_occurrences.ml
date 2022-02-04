@@ -981,19 +981,33 @@ let rec union_list ts =
 
 let closure_ids t = For_closure_ids.keys t.closure_ids
 
-let normal_closure_ids t =
+let closure_ids_normal t =
   For_closure_ids.fold_with_mode t.closure_ids ~init:Closure_id.Set.empty
     ~f:(fun acc closure_var name_mode ->
       if Name_mode.is_normal name_mode
       then Closure_id.Set.add closure_var acc
       else acc)
 
+let closure_ids_in_types t =
+  For_closure_ids.fold_with_mode t.closure_ids ~init:Closure_id.Set.empty
+    ~f:(fun acc closure_var name_mode ->
+      if Name_mode.is_in_types name_mode
+      then Closure_id.Set.add closure_var acc
+      else acc)
+
 let closure_vars t = For_closure_vars.keys t.closure_vars
 
-let normal_closure_vars t =
+let closure_vars_normal t =
   For_closure_vars.fold_with_mode t.closure_vars
     ~init:Var_within_closure.Set.empty ~f:(fun acc closure_var name_mode ->
       if Name_mode.is_normal name_mode
+      then Var_within_closure.Set.add closure_var acc
+      else acc)
+
+let closure_vars_in_types t =
+  For_closure_vars.fold_with_mode t.closure_vars
+    ~init:Var_within_closure.Set.empty ~f:(fun acc closure_var name_mode ->
+      if Name_mode.is_in_types name_mode
       then Var_within_closure.Set.add closure_var acc
       else acc)
 
@@ -1263,3 +1277,15 @@ let restrict_to_closure_vars
       newer_version_of_code_ids = _
     } =
   { empty with closure_vars }
+
+let restrict_to_closure_vars_and_closure_ids
+    { names = _;
+      continuations = _;
+      continuations_with_traps = _;
+      continuations_in_trap_actions = _;
+      closure_ids;
+      closure_vars;
+      code_ids = _;
+      newer_version_of_code_ids = _
+    } =
+  { empty with closure_ids; closure_vars }

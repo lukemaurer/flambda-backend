@@ -122,11 +122,15 @@ val continuations_including_in_trap_actions : t -> Continuation.Set.t
 
 val closure_ids : t -> Closure_id.Set.t
 
-val normal_closure_ids : t -> Closure_id.Set.t
+val closure_ids_normal : t -> Closure_id.Set.t
+
+val closure_ids_in_types : t -> Closure_id.Set.t
 
 val closure_vars : t -> Var_within_closure.Set.t
 
-val normal_closure_vars : t -> Var_within_closure.Set.t
+val closure_vars_normal : t -> Var_within_closure.Set.t
+
+val closure_vars_in_types : t -> Var_within_closure.Set.t
 
 val symbols : t -> Symbol.Set.t
 
@@ -137,6 +141,8 @@ val newer_version_of_code_ids : t -> Code_id.Set.t
 val only_newer_version_of_code_ids : t -> Code_id.Set.t
 
 val restrict_to_closure_vars : t -> t
+
+val restrict_to_closure_vars_and_closure_ids : t -> t
 
 val code_ids_and_newer_version_of_code_ids : t -> Code_id.Set.t
 
