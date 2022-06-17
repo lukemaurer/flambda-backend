@@ -17,25 +17,33 @@
 type 'a t
 
 val define :
-  generate:(Splittable_random.t -> 'a) ->
-  ?print:(Format.formatter -> 'a -> unit) ->
+  generator:'a Generator.t ->
+  ?shrinker:'a Shrinker.t ->
+  ?printer:'a Printer.t ->
   unit ->
   'a t
 
-val with_print : 'a t -> print:(Format.formatter -> 'a -> unit) -> 'a t
+val define_with_repr :
+  generator:'repr Generator.t ->
+  ?shrinker:'repr Shrinker.t ->
+  ?printer:'repr Printer.t ->
+  get_value:('repr -> 'a) ->
+  unit ->
+  'a t
 
-val generate : 'a t -> Splittable_random.t -> 'a
+module Repr : sig
+  type 'a t
 
-val print : 'a t -> Format.formatter -> 'a -> unit
+  val value : 'a t -> 'a
+  val shrink : 'a t -> 'a t Seq.t
+  val print : Format.formatter -> 'a t -> unit
+end
+
+val generate : 'a t -> Splittable_random.t -> 'a Repr.t
 
 val bool : bool t
 
 val int : int t
-
-(** Integer between zero (inclusive) and [less_than] (exclusive). *)
-val small_nat : less_than:int -> int t
-
-val log_int : int t
 
 val option : 'a t -> 'a option t
 
@@ -47,53 +55,18 @@ val triple : 'a t -> 'b t -> 'c t -> ('a * 'b * 'c) t
 
 val quad : 'a t -> 'b t -> 'c t -> 'd t -> ('a * 'b * 'c * 'd) t
 
-val const : 'a -> 'a t
+module T : sig
+  type nonrec 'a t = 'a t
+end
 
-val one_of : 'a list -> 'a t
+val tuple : ('a, 'b) Tuple.Of(T).t -> ('a, 'b) Tuple.t t
 
-val list : 'a t -> expected_length:int -> 'a list t
+val list : 'a t -> length:int -> 'a list t
 
 val fn : ?hash_arg:('a -> int) -> 'b t -> ('a -> 'b) t
+
+val fn_w_id : ?hash_arg:('a -> int) -> 'a t -> ('a -> 'a) t
 
 val fn2 : ?hash_args:('a * 'b -> int) -> 'c t -> ('a -> 'b -> 'c) t
 
 val fn3 : ?hash_args:('a * 'b * 'c -> int) -> 'd t -> ('a -> 'b -> 'c -> 'd) t
-
-val map : 'a t -> f:('a -> 'b) -> 'b t
-
-(** Change the generator but keep the printer. *)
-val map_generate : 'a t -> f:('a -> 'a) -> 'a t
-
-val bind : 'a t -> f:('a -> 'b t) -> 'b t
-
-val choose : (int * 'a t) list -> 'a t
-
-module Let_syntax : sig
-  val ( let+ ) : 'a t -> ('a -> 'b) -> 'b t
-
-  val ( and+ ) : 'a t -> 'b t -> ('a * 'b) t
-
-  val ( let* ) : 'a t -> ('a -> 'b t) -> 'b t
-
-  val ( and* ) : 'a t -> 'b t -> ('a * 'b) t
-end
-
-module Tuple : sig
-  type 'a type_ := 'a t
-
-  (** A list of types, comprising a tuple type. For example, [[int; bool] : (int
-      -> bool -> 'b, 'b) t]. ['b] should be left polymorphic (a la [format3] and
-      friends). *)
-  type ('a, 'b) t =
-    | [] : ('a, 'a) t
-    | ( :: ) : 'a type_ * ('b, 'c) t -> ('a -> 'b, 'c) t
-
-  module Value : sig
-    (** The value of a tuple type, i.e., a tuple. *)
-    type ('a, 'b) t =
-      | [] : ('a, 'a) t
-      | ( :: ) : 'a * ('b, 'c) t -> ('a -> 'b, 'c) t
-  end
-end
-
-val tuple : ('a, 'b) Tuple.t -> ('a, 'b) Tuple.Value.t t

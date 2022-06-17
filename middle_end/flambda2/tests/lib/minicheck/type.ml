@@ -14,257 +14,138 @@
 
 [@@@ocaml.warning "+a-4-30-40-41-42"]
 
-type 'a t =
-  { generate : Splittable_random.t -> 'a;
-    print : Format.formatter -> 'a -> unit
+module Impl = struct
+  type 'a t = {
+    generator : 'a Generator.t;
+    shrinker : 'a Shrinker.t;
+    printer : 'a Printer.t;
   }
+end
 
-let generate t = t.generate
+type ('a, 'repr) t_with_repr = { impl : 'repr Impl.t ; get_value : 'repr -> 'a }
 
-let print t = t.print
+type 'a t = T : ('a, 'repr) t_with_repr -> 'a t [@@unboxed]
 
-let print_unknown ppf _ = Format.pp_print_string ppf "_"
+let define_with_repr ~generator ?(shrinker = Shrinker.atomic) ?(printer = Printer.opaque)
+    ~get_value () =
+  T { impl = { generator; shrinker; printer; }; get_value }
 
-let define ~generate ?(print = print_unknown) () = { generate; print }
+let define ~generator ?shrinker ?printer () =
+  let get_value a = a in
+  define_with_repr ~generator ?shrinker ?printer ~get_value ()
 
-let with_print t ~print = { t with print }
+module Repr = struct
+  type 'a t = T : {
+      repr : 'repr;
+      value : 'a;
+      type_ : ('a, 'repr) t_with_repr;
+    } -> 'a t
 
-let bool =
-  let generate r = Splittable_random.int r mod 2 = 0 in
+  let value (T t) = t.value
+  let shrink (T t) = t.type_.impl.shrinker t.repr |> Seq.map (fun repr -> let value = t.type_.get_value repr in T {t with repr; value })
+  let print ppf (T t) = t.type_.impl.printer ppf t.repr
+end
 
-  define () ~generate ~print:Format.pp_print_bool
+let generate (T t) r =
+  let repr = t.impl.generator r in
+  let value = t.get_value repr in
+  Repr.T { repr; value; type_ = t }
 
-let int = define () ~generate:Splittable_random.int ~print:Format.pp_print_int
+module G = Generator
+module P = Printer
+module S = Shrinker
 
-let map_generate ty ~f =
-  let generate r = f (generate ty r) in
-  define () ~generate ~print:(print ty)
+let bool = define ~generator:G.bool ~printer:P.bool ()
 
-(* Should be small because we're doing this the dumb way *)
-let small_nat ~less_than =
-  map_generate int ~f:(fun i -> Int.abs i mod less_than)
+let int = define ~generator:G.int ~printer:P.int ()
 
-let log_int =
-  let generate r =
-    (* This assumes that the size of [int] is one less than the word size, which
-       isn't true for JavaScript *)
-    let bits = Splittable_random.int r mod Sys.word_size in
-    if bits = 0
-    then 0
-    else
-      let high_bit = 1 lsl (bits - 1) in
-      let mask = high_bit - 1 in
-      Splittable_random.int r land mask lor high_bit
+let option (T { impl = { generator; shrinker; printer; }; get_value }) =
+  let generator = G.option generator in
+  let shrinker = S.option shrinker in
+  let printer = P.option printer in
+  let get_value = Option.map get_value in
+  T { impl = { generator; shrinker; printer; }; get_value }
+
+let list (T { impl = { generator; shrinker; printer; }; get_value }) ~length =
+  let generator = G.list generator ~length in
+  let shrinker = S.list shrinker in
+  let printer = P.list printer in
+  let get_value = List.map get_value in
+  T { impl = { generator; shrinker; printer; }; get_value }
+
+let fn ?hash_arg (T { impl = { generator; shrinker; printer; }; get_value }) =
+  let module Repr = struct
+    type ('a, 'b) t =
+      (* Pre-generate a constant in case we want to shrink this to a constant function *)
+      { code : ('a, 'b) Code.t; const_for_shrinking : 'b }
+  end
   in
-  define () ~generate ~print:Format.pp_print_int
-
-let option ty =
-  let generate r =
-    let choose_none = generate bool r in
-    if choose_none then None else Some (generate ty r)
-  in
-  let print ppf o =
-    Format.pp_print_option
-      ~none:(fun ppf () -> Format.pp_print_string ppf "<none>")
-      (print ty) ppf o
-  in
-  define () ~generate ~print
-
-let map { generate; print = _ } ~f =
-  let generate r = f (generate r) in
-  define () ~generate
-
-let bind { generate; print = _ } ~f =
-  let generate r =
-    let a = generate r in
-    let { generate; print = _ } = f a in
-    generate r
-  in
-  define () ~generate
-
-(* Would love to make these print functions local, but doing so crashes
-   ocamlformat due to the [@ocamlformat "disable"]. See
-   https://github.com/ocaml-ppx/ocamlformat/issues/2096 *)
-
-let [@ocamlformat "disable"] print_list ty ppf l =
-  let pp_sep ppf () = Format.fprintf ppf "@,, " in
-  Format.fprintf ppf "@[<hov>[ %a ]@]"
-    (Format.pp_print_list ~pp_sep (print ty)) l
-
-let list ty ~expected_length =
-  let generate r =
-    let rec loop acc =
-      let stop = Splittable_random.int r mod (expected_length + 1) = 0 in
-      if stop
-      then acc
-      else
-        let a = generate ty r in
-        loop (a :: acc)
+  let generator =
+    let open G.Let_syntax in
+    let+ code = G.code ?hash_arg generator
+    and+ const_for_shrinking = generator
     in
-    loop []
+    Repr.{ code; const_for_shrinking }
   in
-  let print = print_list ty in
-  define ~generate ~print ()
-
-let print_fn ppf _ = Format.pp_print_string ppf "fun"
-
-let fn ?(hash_arg = Hashtbl.hash) ret_ty =
-  let generate r =
-    let base = Splittable_random.split r in
-    fun a ->
-      let r = Splittable_random.copy base in
-      Splittable_random.perturb r (hash_arg a);
-      generate ret_ty r
+  let shrinker Repr.{ code; const_for_shrinking } =
+    S.code shrinker ~const:const_for_shrinking code
+    |> Seq.map (fun code -> Repr.{ code; const_for_shrinking })
   in
-  define ~generate ~print:print_fn ()
+  let printer ppf Repr.{ code; _ } = P.code printer ppf code in
+  let get_value Repr.{ code; _ } = (); fun a -> get_value (Code.call code a) in
+  T { impl = { generator; shrinker; printer; }; get_value }
+
+(* CR lmaurer: Do this properly. Probably needs a flag GADT so that I don't C+P everything. *)
+let fn_w_id ?hash_arg t_ret = fn ?hash_arg t_ret
+
+let map (T t) ~f =
+  (* A moment of appreciation for polymorphic update. *)
+  T { t with get_value = fun r -> f (t.get_value r) }
 
 let fn2 ?hash_args ret_ty =
   fn ?hash_arg:hash_args ret_ty
   |> map ~f:(fun f a b -> f (a, b))
-  |> with_print ~print:print_fn
 
 let fn3 ?hash_args ret_ty =
   fn ?hash_arg:hash_args ret_ty
   |> map ~f:(fun f a b c -> f (a, b, c))
-  |> with_print ~print:print_fn
 
-let const a =
-  let generate _r = a in
-  define () ~generate
+let unit = 
+  let generator = G.unit in
+  let printer = P.unit in
+  define ~generator ~printer ()
 
-let one_of l =
-  small_nat ~less_than:(List.length l) |> map ~f:(fun i -> List.nth l i)
+module T = struct
+  type nonrec 'a t = 'a t
+end
 
-let choose choices =
-  let sum = List.fold_left (fun sum (w, _) -> sum + w) 0 choices in
-  let generate r =
-    let rec choose_generator i choices =
-      match choices with
-      | [] -> failwith "no choices"
-      | (w, gen) :: _ when i < w -> gen
-      | (w, _) :: choices -> choose_generator (i - w) choices
-    in
-    let i = generate (small_nat ~less_than:sum) r in
-    let generator = choose_generator i choices in
-    generate generator r
-  in
-  let print =
-    (* Just pick whatever prints the first element?
+let tuple_impl impls =
+  let generators impls = let open Tuple.Map(Impl)(G.T) in map impls ~f:{f = fun impl -> impl.generator} in
+  let shrinkers impls = let open Tuple.Map(Impl)(S.T) in map impls ~f:{f = fun impl -> impl.shrinker } in
+  let printers impls = let open Tuple.Map(Impl)(P.T) in map impls ~f:{f = fun impl -> impl.printer } in
+let generator = G.tuple (generators impls) in
+let shrinker = S.tuple (shrinkers impls) in
+let printer = P.tuple (printers impls) in
+  Impl.{ generator; shrinker; printer }
 
-       CR lmaurer: Yuck. This persuades me that maybe coupling generators and
-       printers together was a bad idea. *)
-    match choices with
-    | [] -> failwith "no choices"
-    | (_, { print; _ }) :: _ -> print
-  in
-  define () ~generate ~print
-
-let unit =
-  let generate _ = () in
-  let print ppf () = Format.pp_print_string ppf "()" in
-  define () ~generate ~print
-
-let [@ocamlformat "disable"] print_pair ty1 ty2 ppf (a, b) =
-  Format.fprintf ppf "@[<hv>( %a@,, %a )@]"
-  (print ty1) a
-  (print ty2) b
-
-let pair ty1 ty2 =
-  let generate r =
-    let a = generate ty1 r in
-    let b = generate ty2 r in
-    a, b
-  in
-  let print = print_pair ty1 ty2 in
-  define () ~generate ~print
-
-let [@ocamlformat "disable"] print_triple ty1 ty2 ty3 ppf (a, b, c) =
-  Format.fprintf ppf "@[<hv>( %a@,, %a@,, %a )@]"
-    (print ty1) a
-    (print ty2) b
-    (print ty3) c
-
-let triple ty1 ty2 ty3 =
-  let generate r =
-    let a = generate ty1 r in
-    let b = generate ty2 r in
-    let c = generate ty3 r in
-    a, b, c
-  in
-  let print = print_triple ty1 ty2 ty3 in
-  define () ~generate ~print
-
-let [@ocamlformat "disable"] print_quad ty1 ty2 ty3 ty4 ppf (a, b, c, d) =
-  Format.fprintf ppf
-    "@[<hv>( %a@,, %a@,, %a@,, %a )@]"
-    (print ty1) a
-    (print ty2) b
-    (print ty3) c
-    (print ty4) d
-
-let quad ty1 ty2 ty3 ty4 =
-  let generate r =
-    let a = generate ty1 r in
-    let b = generate ty2 r in
-    let c = generate ty3 r in
-    let d = generate ty4 r in
-    a, b, c, d
-  in
-  let print = print_quad ty1 ty2 ty3 ty4 in
-  define () ~generate ~print
-
-module Tuple = struct
-  type 'a type_ = 'a t
-
-  type ('a, 'b) t =
-    | [] : ('a, 'a) t
-    | ( :: ) : 'a type_ * ('b, 'c) t -> ('a -> 'b, 'c) t
-
-  module Value = struct
-    type ('a, 'b) tuple = ('a, 'b) t
-
-    type ('a, 'b) t =
-      | [] : ('a, 'a) t
-      | ( :: ) : 'a * ('b, 'c) t -> ('a -> 'b, 'c) t
-
-    let rec generate : type a b. (a, b) tuple -> Splittable_random.t -> (a, b) t
-        =
-     fun tys r ->
-      match tys with
-      | [] -> []
-      | ty :: tys ->
-        let a = ty.generate r in
-        a :: generate tys r
-
-    let print : ('a, 'b) tuple -> Format.formatter -> ('a, 'b) t -> unit =
-     fun tys ppf t ->
-      let rec loop :
-          type a b.
-          first:bool -> (a, b) tuple -> Format.formatter -> (a, b) t -> unit =
-       fun ~first tys ppf t ->
-        match tys, t with
-        | [], [] -> ()
-        | ty :: tys, a :: t ->
-          if not first then Format.fprintf ppf "@,, ";
-          ty.print ppf a;
-          loop ~first:false tys ppf t
-        | _, _ -> assert false
-      in
-      Format.fprintf ppf "@[<hv>( ";
-      loop ~first:true tys ppf t;
-      Format.fprintf ppf " )@]"
+let tuple ts =
+  let open struct
+    type ('a, 'r) impls_and_getter_packed = Pack : ('b, 'r) Tuple.Of(Impl).t * (('b, 'r) Tuple.t -> ('a, 'r) Tuple.t) -> ('a, 'r) impls_and_getter_packed
   end
-end
+  in
+  let rec impls_and_getter : type a r. (a, r) Tuple.Of(T).t -> (a, r) impls_and_getter_packed =
+    function [] -> Pack ([], fun nil -> nil)
+           | T { impl; get_value } :: ts ->
+             let Pack (impls, get_values) = impls_and_getter ts in
+             Pack (impl :: impls, function (a :: reprs) -> (get_value a :: get_values reprs) | [] -> assert false)
+  in
+  let Pack (impls, get_value) = impls_and_getter ts in
+  let impl = tuple_impl impls in
+  T { impl; get_value }
 
-let tuple tys =
-  define () ~generate:(Tuple.Value.generate tys) ~print:(Tuple.Value.print tys)
+(* CR lmaurer: Special-case these, albeit painfully *)
+let pair t_a t_b = tuple [t_a; t_b] |> map ~f:Tuple.to_pair
 
-module Let_syntax = struct
-  let ( let+ ) a f = map a ~f
+let triple t_a t_b t_c = tuple [t_a; t_b; t_c] |> map ~f:Tuple.to_triple
 
-  let ( and+ ) = pair
-
-  let ( let* ) a f = bind a ~f
-
-  let ( and* ) = pair
-end
+let quad t_a t_b t_c t_d = tuple [t_a; t_b; t_c; t_d] |> map ~f:Tuple.to_quad

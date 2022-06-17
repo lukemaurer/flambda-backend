@@ -31,11 +31,11 @@ let check0 ~type_ ~f ?(n = 1000) ?(verbose = false) ~name () =
     let a = Type.generate type_ r in
     if verbose
     then
-      Format.eprintf "@[<hov 2>Attempt %d/%d:@ %a@]@." !i n (Type.print type_) a;
-    if not (f a)
+      Format.eprintf "@[<hov 2>Attempt %d/%d:@ %a@]@." !i n Type.Repr.print a;
+    if not (f (Type.Repr.value a))
     then begin
       Format.eprintf "FAILED after %d/%d attempts@." !i n;
-      Format.eprintf "@[<hov 2>Counterexample:@ %a@]@." (Type.print type_) a;
+      Format.eprintf "@[<hov 2>Counterexample:@ %a@]@." Type.Repr.print a;
       failed := true;
       something_has_failed := true
     end
@@ -47,12 +47,9 @@ let check0 ~type_ ~f ?(n = 1000) ?(verbose = false) ~name () =
     let duration = finish -. start in
     Format.eprintf "PASSED %d attempts (%f s)@." n duration
 
-let rec call : type a b. a -> (a, b) Type.Tuple.Value.t -> b =
- fun f tup -> match tup with [] -> f | a :: tup -> call (f a) tup
-
 let check :
     type a.
-    types:(a, bool) Type.Tuple.t ->
+    types:(a, bool) Tuple.Of(Type.T).t ->
     f:a ->
     ?n:int ->
     ?verbose:bool ->
@@ -74,6 +71,6 @@ let check :
        over-engineered this enough as is *)
     run
       (Type.quad ty1 ty2 ty3 (Type.tuple types))
-      (fun (a, b, c, tup) -> call (f a b c) tup)
+      (fun (a, b, c, tup) -> Tuple.call ~f:(f a b c) tup)
 
 let something_has_failed () = !something_has_failed

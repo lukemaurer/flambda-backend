@@ -27,7 +27,7 @@ module Type = Type
     on standard error. If [f] returns true for all [n] cases, a success message
     is printed on standard error. *)
 val check :
-  types:('a, bool) Type.Tuple.t ->
+  types:('a, bool) Tuple.Of(Type.T).t ->
   f:'a ->
   ?n:int (** Number of runs (default is 1000) *) ->
   ?verbose:bool

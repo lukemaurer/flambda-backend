@@ -4,7 +4,7 @@
 (*                                                                        *)
 (*           Mark Shinwell and Leo White, Jane Street Europe              *)
 (*                                                                        *)
-(*   Copyright 2015--2020 Jane Street Group LLC                           *)
+(*   Copyright 2015--2022 Jane Street Group LLC                           *)
 (*                                                                        *)
 (*   All rights reserved.  This file is distributed under the terms of    *)
 (*   the GNU Lesser General Public License version 2.1, with the          *)
@@ -12,22 +12,30 @@
 (*                                                                        *)
 (**************************************************************************)
 
-[@@@ocaml.warning "+a-30-40-41-42"]
+[@@@ocaml.warning "+a-4-30-40-41-42"]
 
-module Make (_ : sig
-  val print : Format.formatter -> int -> unit
-end) : sig
-  module Set : sig
-    include Container_types.Set with type elt = int
+type 'a t = 'a -> 'a Seq.t
 
-    (*_ For testing *)
-    val valid : t -> bool
-  end
+val atomic : 'a t
 
-  module Map : sig
-    include Container_types.Map with type key = int with module Set = Set
+val option : 'a t -> 'a option t
 
-    (*_ For testing *)
-    val valid : _ t -> bool
-  end
+val code : ?const:'b -> 'b t -> ('a, 'b) Code.t t
+
+val code_w_id : ?const:'a -> 'a t -> ('a, 'a) Code.t t
+
+val pair : 'a t -> 'b t -> ('a * 'b) t
+
+val triple : 'a t -> 'b t -> 'c t -> ('a * 'b * 'c) t
+
+val quad : 'a t -> 'b t -> 'c t -> 'd t -> ('a * 'b * 'c * 'd) t
+
+val list : 'a t -> 'a list t
+
+val const : 'a -> 'a t
+
+module T : sig
+  type nonrec 'a t = 'a t
 end
+
+val tuple : ('a, 'b) Tuple.Of(T).t -> ('a, 'b) Tuple.t t
