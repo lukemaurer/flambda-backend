@@ -19,28 +19,30 @@ type ('a, 'b) t =
   | ( :: ) : 'a * ('b, 'c) t -> ('a -> 'b, 'c) t
 
 let nil = []
+
 let cons a t = a :: t
 
 let rec call : type a r. (a, r) t -> f:a -> r =
-  fun t ~f ->
-  match t with
-  | [] -> f
-  | a :: t -> call t ~f:(f a)
+ fun t ~f -> match t with [] -> f | a :: t -> call t ~f:(f a)
 
 let of_pair (a, b) = [a; b]
+
 let of_triple (a, b, c) = [a; b; c]
+
 let of_quad (a, b, c, d) = [a; b; c; d]
 
-let to_pair : type a b r. (a -> b -> r, r) t -> a * b =
-  function [a; b] -> (a, b)
-         | _ -> assert false
-let to_triple : type a b c r. (a -> b -> c -> r, r) t -> a * b * c =
-  function [a; b; c] -> (a, b, c)
-         | _ -> assert false
+let to_pair : type a b r. (a -> b -> r, r) t -> a * b = function
+  | [a; b] -> a, b
+  | _ -> assert false
+
+let to_triple : type a b c r. (a -> b -> c -> r, r) t -> a * b * c = function
+  | [a; b; c] -> a, b, c
+  | _ -> assert false
 
 let to_quad : type a b c d r. (a -> b -> c -> d -> r, r) t -> a * b * c * d =
-  function [a; b; c; d] -> (a, b, c, d)
-         | _ -> assert false
+  function
+  | [a; b; c; d] -> a, b, c, d
+  | _ -> assert false
 
 module Of (T : sig
   type 'a t
@@ -51,17 +53,21 @@ struct
     | ( :: ) : 'a T.t * ('b, 'c) t -> ('a -> 'b, 'c) t
 end
 
-module Map (From : sig type 'a t end) (Into : sig type 'a t end) = struct
+module Map (From : sig
+  type 'a t
+end) (Into : sig
+  type 'a t
+end) =
+struct
   type t = { f : 'a. 'a From.t -> 'a Into.t }
 
   let rec map : type a r. (a, r) Of(From).t -> f:t -> (a, r) Of(Into).t =
-    fun t ~f ->
-    match t with
-    [] -> []
-           | a :: t -> f.f a :: map ~f t
+   fun t ~f -> match t with [] -> [] | a :: t -> f.f a :: map ~f t
 end
+
 module Of2 (T : sig
-    type ('a, 'b) t end) =
+  type ('a, 'b) t
+end) =
 struct
   type ('a, 'b, 'r) t =
     | [] : ('r, 'r, 'r) t

@@ -11,9 +11,7 @@ let bool = Format.pp_print_bool
 let int = Format.pp_print_int
 
 let option t ppf o =
-  Format.pp_print_option
-    ~none:(fun ppf () -> str ppf "none")
-    t ppf o
+  Format.pp_print_option ~none:(fun ppf () -> str ppf "none") t ppf o
 
 let [@ocamlformat "disable"] list t ppf l =
   let pp_sep ppf () = Format.fprintf ppf "@,, " in
@@ -25,13 +23,13 @@ let unit ppf () = str ppf "()"
 let fn ppf = opaque_as "<fun>" ppf
 
 let fn2 = fn
+
 let fn3 = fn
 
 let [@ocamlformat "disable"] pair t_a t_b ppf (a, b) =
   Format.fprintf ppf "@[<hv>( %a@,, %a )@]"
     t_a a
     t_b b
-
 
 let [@ocamlformat "disable"] triple t_a t_b t_c ppf (a, b, c) =
   Format.fprintf ppf "@[<hv>( %a@,, %a@,, %a )@]"
@@ -51,24 +49,29 @@ module T = struct
 end
 
 let tuple : ('a, 'b) Tuple.Of(T).t -> ('a, 'b) Tuple.t t =
-  fun ts ppf tup ->
+ fun ts ppf tup ->
   let rec loop :
-    type a b.
-    first:bool -> (a, b) Tuple.Of(T).t -> Format.formatter -> (a, b) Tuple.t -> unit =
-    fun ~first tys ppf tup ->
-      match tys, tup with
-      | [], [] -> ()
-      | t :: ts, a :: tup ->
-        if not first then Format.fprintf ppf "@,, ";
-        t ppf a;
-        loop ~first:false ts ppf tup
-      | _, _ -> assert false
+      type a b.
+      first:bool ->
+      (a, b) Tuple.Of(T).t ->
+      Format.formatter ->
+      (a, b) Tuple.t ->
+      unit =
+   fun ~first tys ppf tup ->
+    match tys, tup with
+    | [], [] -> ()
+    | t :: ts, a :: tup ->
+      if not first then Format.fprintf ppf "@,, ";
+      t ppf a;
+      loop ~first:false ts ppf tup
+    | _, _ -> assert false
   in
   Format.fprintf ppf "@[<hv>( ";
   loop ~first:true ts ppf tup;
   Format.fprintf ppf " )@]"
 
-let code : type a b. b t -> (a, b) Code.t t = fun t_ret ppf code ->
+let code : type a b. b t -> (a, b) Code.t t =
+ fun t_ret ppf code ->
   match code with
   | Identity -> str ppf "(fun a -> a)"
   | Const b -> Format.fprintf ppf "@[<hov 2>(fun _ ->@ %a)@]" t_ret b

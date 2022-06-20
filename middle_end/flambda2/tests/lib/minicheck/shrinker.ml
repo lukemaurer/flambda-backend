@@ -48,17 +48,38 @@ module Seq = struct
     Seq.unfold step { next_round_rev = []; this_round = ts }
 end
 
-let list t =
+let debug print_elt t a =
+  let rec take n seq () =
+    if n <= 0
+    then Seq.Nil
+    else
+      match seq () with
+      | Seq.Nil -> Seq.Nil
+      | Seq.Cons (a, seq) -> Seq.Cons (a, take (n - 1) seq)
+  in
+  Format.eprintf "%a@." (Printer.list print_elt) (take 100 (t a) |> List.of_seq)
+
+let list t l =
+  let cons_unless_empty l seq =
+    match l with [] -> seq | _ -> Seq.cons l seq
+  in
   let rec loop l =
     match l with
     | [] -> Seq.empty
     | a :: l ->
       Seq.round_robin
-        [ Seq.singleton l;
+        [ cons_unless_empty l (loop l);
           Seq.map (fun a -> a :: l) (t a);
           Seq.map (fun l -> a :: l) (fun () -> loop l ()) ]
   in
-  loop
+  Seq.cons [] (loop l)
+
+let () =
+  let nat_slowly n =
+    let rec loop n () = if n < 0 then Seq.Nil else Seq.Cons (n, loop (n - 1)) in
+    loop (n - 1)
+  in
+  debug (Printer.list Printer.int) (list nat_slowly) [1; 2; 3; 4]
 
 let const a _ = Seq.singleton a
 
@@ -67,18 +88,18 @@ let option t = function
   | Some a -> Seq.cons None (Seq.map Option.some (t a))
 
 let code : type a b. ?const:b -> b t -> (a, b) Code.t t =
-  fun ?const t code ->
+ fun ?const t code ->
   let shrink_as_const a = Seq.map (fun a -> Code.Const a) (t a) in
   match code with
   | Identity -> Seq.empty
   | Const a -> shrink_as_const a
-  | Fun _ ->
+  | Fun _ -> (
     match const with
     | None -> Seq.empty
-    | Some const -> Seq.cons (Code.Const const) (shrink_as_const const)
+    | Some const -> Seq.cons (Code.Const const) (shrink_as_const const))
 
-let code_w_id :type a. ?const:a -> a t -> (a, a) Code.t t =
-  fun ?const t c ->
+let code_w_id : type a. ?const:a -> a t -> (a, a) Code.t t =
+ fun ?const t c ->
   match c with
   | Identity -> Seq.empty
   | _ -> Seq.cons Code.Identity (code ?const t c)

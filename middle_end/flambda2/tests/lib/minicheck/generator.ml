@@ -6,20 +6,24 @@ let map (t : 'a t) ~f : 'b t = fun r -> f (t r)
 
 let bind (t : 'a t) ~f : 'b t = fun r -> f (t r) r
 
-let pair t_a t_b : (_ * _) t = fun r ->
+let pair t_a t_b : (_ * _) t =
+ fun r ->
   let a = t_a r in
   let b = t_b r in
-  (a, b)
+  a, b
 
 module Let_syntax = struct
-  let (let+) t f = map t ~f
-  let (and+) t_a t_b : (_ * _) t = fun r ->
+  let ( let+ ) t f = map t ~f
+
+  let ( and+ ) t_a t_b : (_ * _) t =
+   fun r ->
     let a = t_a r in
     let b = t_b r in
-    (a, b)
+    a, b
 
-  let (let*) t f = bind t ~f
-  let (and*) = (and+)
+  let ( let* ) t f = bind t ~f
+
+  let ( and* ) = ( and+ )
 end
 
 open Let_syntax
@@ -33,7 +37,9 @@ let small_nat ~less_than =
   then
     failwith
       (Format.sprintf "small_nat: upper bound %d must be positive" less_than)
-  else let+ i = int in Int.abs i mod less_than
+  else
+    let+ i = int in
+    Int.abs i mod less_than
 
 let log_int =
   let max_size =
@@ -57,16 +63,17 @@ let log_int =
       let other_bits = Splittable_random.int r land mask in
       high_bit land other_bits
 
-let option t : _ option t = fun r ->
+let option t : _ option t =
+ fun r ->
   let choose_none = bool r in
   if choose_none then None else Some (t r)
 
 let list t ~length : _ list t =
-  if length < 0 then failwith (Format.sprintf "list: length must be non-negative: %d" length) else
-  fun r ->
-    let rec loop n acc =
-      if n = 0 then acc else loop (n - 1) (t r :: acc)
-    in
+  if length < 0
+  then failwith (Format.sprintf "list: length must be non-negative: %d" length)
+  else
+    fun r ->
+    let rec loop n acc = if n = 0 then acc else loop (n - 1) (t r :: acc) in
     loop length []
 
 let fn ?(hash_arg = Hashtbl.hash) t_ret r =
@@ -77,12 +84,10 @@ let fn ?(hash_arg = Hashtbl.hash) t_ret r =
     t_ret r
 
 let fn2 ?hash_args ret_ty =
-  fn ?hash_arg:hash_args ret_ty
-  |> map ~f:(fun f a b -> f (a, b))
+  fn ?hash_arg:hash_args ret_ty |> map ~f:(fun f a b -> f (a, b))
 
 let fn3 ?hash_args ret_ty =
-  fn ?hash_arg:hash_args ret_ty
-  |> map ~f:(fun f a b c -> f (a, b, c))
+  fn ?hash_arg:hash_args ret_ty |> map ~f:(fun f a b c -> f (a, b, c))
 
 let const a _r = a
 
@@ -104,30 +109,46 @@ let choose (choices : (int * 'a t) list) : _ t =
     generator r
 
 let code ?hash_arg t_ret : (_, _) Code.t t =
-  choose [ 1, (let+ r = t_ret in Code.Const r)
-         ; 3, (let+ f = fn ?hash_arg t_ret in Code.Fun f) ]
+  choose
+    [ ( 1,
+        let+ r = t_ret in
+        Code.Const r );
+      ( 3,
+        let+ f = fn ?hash_arg t_ret in
+        Code.Fun f ) ]
 
 let code_w_id ?hash_arg t_ret : (_, _) Code.t t =
-  choose [ 1, const Code.Identity
-         ; 4, code ?hash_arg t_ret ]
+  choose [1, const Code.Identity; 4, code ?hash_arg t_ret]
 
 let unit = const ()
 
-let pair t_a t_b : (_ * _) t = fun r ->
-  let a = t_a r in let b = t_b r in a, b
+let pair t_a t_b : (_ * _) t =
+ fun r ->
+  let a = t_a r in
+  let b = t_b r in
+  a, b
 
-let triple t_a t_b t_c : (_ * _ * _) t = fun r ->
-  let a = t_a r in let b = t_b r in let c = t_c r in a, b, c
+let triple t_a t_b t_c : (_ * _ * _) t =
+ fun r ->
+  let a = t_a r in
+  let b = t_b r in
+  let c = t_c r in
+  a, b, c
 
-let quad t_a t_b t_c t_d : (_ * _ * _ * _) t = fun r ->
-  let a = t_a r in let b = t_b r in let c = t_c r in let d = t_d r in a, b, c, d
+let quad t_a t_b t_c t_d : (_ * _ * _ * _) t =
+ fun r ->
+  let a = t_a r in
+  let b = t_b r in
+  let c = t_c r in
+  let d = t_d r in
+  a, b, c, d
 
 module T = struct
   type nonrec 'a t = 'a t
 end
 
 let rec tuple : type a b. (a, b) Tuple.Of(T).t -> (a, b) Tuple.t t =
-  fun ts r ->
+ fun ts r ->
   match ts with
   | [] -> []
   | t :: ts ->

@@ -40,7 +40,7 @@ let shorter bit0 bit1 =
   match bit0 < 0, bit1 < 0 with
   | false, false -> bit0 < bit1
   | true, false | false, true -> bit0 > bit1
-  | true, true -> assert false
+  | true, true -> false
 
 let includes_prefix prefix0 bit0 prefix1 bit1 =
   shorter bit0 bit1 && match_prefix prefix1 prefix0 bit0
