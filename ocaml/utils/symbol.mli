@@ -22,10 +22,6 @@ type t
 
 val for_predef_ident : Ident.t -> t
 
-(* CR mshinwell: Insist on -for-pack for .mli files; then this function
-   will not need to take a pack prefix. *)
-val for_global_or_predef_ident : Compilation_unit.Prefix.t -> Ident.t -> t
-
 (** It is assumed that the provided [Ident.t] is in the current unit. *)
 val for_local_ident : Ident.t -> t
 
@@ -52,3 +48,9 @@ val linkage_name_for_ocamlobjinfo : t -> string
 include Identifiable.S with type t := t
 
 val is_predef_exn : t -> bool
+
+(** Generate the global identifier for a given compilation unit. *)
+(* CR-someday lmaurer: Try and move this somewhere better; note that every place that's
+   sensible and convenient (i.e., [Compilation_unit] or [Ident]) would cause a
+   circularity. *)
+val ident_of_compilation_unit : Compilation_unit.t -> Ident.t

@@ -146,8 +146,7 @@ let get_unit_info modname =
       CU.Name.Tbl.find global_infos_table modname
     with Not_found ->
       let (infos, crc) =
-        if Env.is_imported_opaque (modname |> CU.Name.to_string)
-        then (None, None)
+        if Env.is_imported_opaque modname then (None, None)
         else begin
           try
             let filename =
@@ -164,14 +163,13 @@ let get_unit_info modname =
           end
       in
       current_unit.ui_imports_cmx <-
-        (modname |> CU.Name.to_string, crc) :: current_unit.ui_imports_cmx;
+        (modname, crc) :: current_unit.ui_imports_cmx;
       CU.Name.Tbl.add global_infos_table modname infos;
       infos
   end
 
-let get_global_info global_ident =
-  assert (Ident.is_global global_ident);
-  get_unit_info (global_ident |> Ident.name |> CU.Name.of_string)
+let get_global_info comp_unit =
+  get_unit_info (CU.name comp_unit)
 
 let cache_unit_info ui =
   CU.Name.Tbl.add global_infos_table (CU.name ui.ui_unit) (Some ui)
@@ -184,49 +182,18 @@ let get_clambda_approx ui =
   | Flambda _ -> assert false
   | Clambda approx -> approx
 
-let toplevel_approx :
-  (string, Clambda.value_approximation) Hashtbl.t = Hashtbl.create 16
+let toplevel_approx : Clambda.value_approximation CU.Tbl.t = CU.Tbl.create 16
 
 let record_global_approx_toplevel () =
-  Hashtbl.add toplevel_approx
-    (CU.Name.to_string (CU.name current_unit.ui_unit))
+  CU.Tbl.add toplevel_approx current_unit.ui_unit
     (get_clambda_approx current_unit)
 
-let global_approx id =
-  if Ident.is_predef id then Clambda.Value_unknown
-  else try Hashtbl.find toplevel_approx (Ident.name id)
+let global_approx comp_unit =
+  try CU.Tbl.find toplevel_approx comp_unit
   with Not_found ->
-    match get_global_info id with
+    match get_global_info comp_unit with
       | None -> Clambda.Value_unknown
       | Some ui -> get_clambda_approx ui
-
-(* Determination of pack prefixes for units and identifiers *)
-
-let pack_prefix_for_current_unit () =
-  CU.for_pack_prefix current_unit.ui_unit
-
-let pack_prefix_for_global_ident id =
-  if not (Ident.is_global id) then
-    Misc.fatal_errorf "Identifier %a is not global" Ident.print id
-  else if Hashtbl.mem toplevel_approx (Ident.name id) then
-    CU.for_pack_prefix (CU.get_current_exn ())
-  else
-    match get_global_info id with
-    | Some ui -> CU.for_pack_prefix ui.ui_unit
-    | None ->
-      (* If the .cmx file is missing, the prefix is assumed to be empty. *)
-      CU.Prefix.empty
-
-let symbol_for_global' id =
-  assert (Ident.is_global_or_predef id);
-  let pack_prefix =
-    if Ident.is_global id then pack_prefix_for_global_ident id
-    else CU.Prefix.empty
-  in
-  Symbol.for_global_or_predef_ident pack_prefix id
-
-let symbol_for_global id =
-  symbol_for_global' id |> Symbol.linkage_name
 
 (* Register the approximation of the module being compiled *)
 
@@ -297,16 +264,14 @@ let approx_for_global comp_unit =
   if CU.equal comp_unit CU.predef_exn
   then invalid_arg "approx_for_global with predef_exn compilation unit";
   let comp_unit_name = which_cmx_file comp_unit in
-  let id = Ident.create_persistent (comp_unit_name |> CU.Name.to_string) in
-  let modname = Ident.name id |> CU.Name.of_string in
-  match CU.Name.Tbl.find export_infos_table modname with
+  match CU.Name.Tbl.find export_infos_table comp_unit_name with
   | otherwise -> Some otherwise
   | exception Not_found ->
-    match get_global_info id with
+    match get_unit_info comp_unit_name with
     | None -> None
     | Some ui ->
       let exported = get_flambda_export_info ui in
-      CU.Name.Tbl.add export_infos_table modname exported;
+      CU.Name.Tbl.add export_infos_table comp_unit_name exported;
       merged_environment := Export_info.merge !merged_environment exported;
       Some exported
 
@@ -401,9 +366,8 @@ let structured_constants () =
          provenance = Some provenance;
        })
 
-let require_global global_ident =
-  if not (Ident.is_predef global_ident) then
-    ignore (get_global_info global_ident : Cmx_format.unit_infos option)
+let require_global comp_unit =
+  ignore (get_global_info comp_unit : Cmx_format.unit_infos option)
 
 (* Error report *)
 

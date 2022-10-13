@@ -38,18 +38,6 @@ val reset_info_tables: unit -> unit
 val current_unit_infos: unit -> unit_infos
         (* Return the infos for the unit being compiled *)
 
-val pack_prefix_for_current_unit : unit -> Compilation_unit.Prefix.t
-        (* Return the pack prefix for the unit being compiled *)
-
-val pack_prefix_for_global_ident : Ident.t -> Compilation_unit.Prefix.t
-        (* Find the pack prefix for an identifier by reading the .cmx file.
-           The identifier must be [Global]. *)
-
-val symbol_for_global: Ident.t -> Linkage_name.t
-        (* Return the asm symbol that refers to the given global identifier
-           flambda-only *)
-val symbol_for_global': Ident.t -> Symbol.t
-        (* flambda-only *)
 val global_approx: Ident.t -> Clambda.value_approximation
         (* Return the approximation for the given global identifier
            clambda-only *)

@@ -112,7 +112,8 @@ let preserve_tailcall_for_prim = function
     Pidentity | Popaque | Pdirapply _ | Prevapply _ | Psequor | Psequand
   | Pobj_magic ->
       true
-  | Pbytes_to_string | Pbytes_of_string | Pignore | Pgetglobal _ | Psetglobal _
+  | Pbytes_to_string | Pbytes_of_string | Pignore
+  | Pgetglobal _ | Psetglobal _ | Pgetpredef _
   | Pmakeblock _ | Pmakefloatblock _
   | Pfield _ | Pfield_computed _ | Psetfield _
   | Psetfield_computed _ | Pfloatfield _ | Psetfloatfield _ | Pduprecord _
@@ -390,8 +391,9 @@ let comp_bint_primitive bi suff args =
 
 let comp_primitive p args =
   match p with
-    Pgetglobal id -> Kgetglobal id
-  | Psetglobal id -> Ksetglobal id
+    Pgetglobal cu -> Kgetglobal (cu |> Symbol.ident_of_compilation_unit)
+  | Psetglobal cu -> Ksetglobal (cu |> Symbol.ident_of_compilation_unit)
+  | Pgetpredef id -> Kgetglobal id
   | Pintcomp cmp -> Kintcomp cmp
   | Pcompare_ints -> Kccall("caml_int_compare", 2)
   | Pcompare_floats -> Kccall("caml_float_compare", 2)
@@ -1024,9 +1026,9 @@ and comp_args env argl sz cont =
 
 and comp_expr_list env exprl sz cont = match exprl with
     [] -> cont
-  | [exp] -> comp_expr env exp sz cont
+  | [exp] -> (comp_expr [@nontail]) env exp sz cont
   | exp :: rem ->
-      comp_expr env exp sz (Kpush :: comp_expr_list env rem (sz+1) cont)
+      (comp_expr [@nontail]) env exp sz (Kpush :: comp_expr_list env rem (sz+1) cont)
 
 and comp_exit_args  env argl sz pos cont =
    comp_expr_list_assign env (List.rev argl) sz pos cont

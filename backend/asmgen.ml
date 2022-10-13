@@ -90,16 +90,16 @@ let reset () =
   start_from_emit := false;
   Compiler_pass_map.iter (fun pass (cfg_unit_info : Cfg_format.cfg_unit_info) ->
     if should_save_ir_after pass then begin
-      cfg_unit_info.unit <- Compilation_unit.get_current_exn ();
+      cfg_unit_info.unit <- Compilation_unit.get_current_or_dummy ();
       cfg_unit_info.items <- [];
     end)
     pass_to_cfg;
   if should_save_before_emit () then begin
-    linear_unit_info.unit <- Compilation_unit.get_current_exn ();
+    linear_unit_info.unit <- Compilation_unit.get_current_or_dummy ();
     linear_unit_info.items <- [];
   end;
   if should_save_cfg_before_emit () then begin
-    cfg_unit_info.unit <- Compilation_unit.get_current_exn ();
+    cfg_unit_info.unit <- Compilation_unit.get_current_or_dummy ();
     cfg_unit_info.items <- [];
   end
 
@@ -637,7 +637,7 @@ let compile_implementation unix ?toplevel ~backend ~filename ~prefixname
         clambda_with_constants)
 
 let compile_implementation_flambda2 unix ?toplevel ?(keep_symbol_tables=true)
-    ~filename ~prefixname ~size:module_block_size_in_words ~module_ident
+    ~filename ~prefixname ~size:module_block_size_in_words ~compilation_unit
     ~module_initializer ~flambda2 ~ppf_dump ~required_globals () =
   compile_unit ~ppf_dump ~output_prefix:prefixname
     ~asm_filename:(asm_filename prefixname) ~keep_asm:!keep_asm_file
@@ -646,7 +646,7 @@ let compile_implementation_flambda2 unix ?toplevel ?(keep_symbol_tables=true)
     (fun () ->
       Ident.Set.iter Compilenv.require_global required_globals;
       let cmm_phrases =
-        flambda2 ~ppf_dump ~prefixname ~filename ~module_ident
+        flambda2 ~ppf_dump ~prefixname ~filename ~compilation_unit
           ~module_block_size_in_words ~module_initializer
           ~keep_symbol_tables
       in

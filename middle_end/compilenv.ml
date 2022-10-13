@@ -185,8 +185,7 @@ let get_unit_info modname =
       CU.Name.Tbl.find global_infos_table modname
     with Not_found ->
       let (infos, crc) =
-        if Env.is_imported_opaque (modname |> CU.Name.to_string)
-        then (None, None)
+        if Env.is_imported_opaque modname then (None, None)
         else begin
           try
             let filename =
@@ -204,7 +203,7 @@ let get_unit_info modname =
           end
       in
       current_unit.ui_imports_cmx <-
-        (modname |> CU.Name.to_string, crc) :: current_unit.ui_imports_cmx;
+        (modname, crc) :: current_unit.ui_imports_cmx;
       CU.Name.Tbl.add global_infos_table modname infos;
       infos
   end
@@ -235,6 +234,10 @@ let get_clambda_approx ui =
   | Flambda1 _ | Flambda2 _ -> assert false
   | Clambda approx -> approx
 
+(* CR lmaurer: This is exactly the sort of horrible use of untyped strings I'm
+   trying to be rid of. If you're reading this in 2023, know that I'm very sore
+   about it. *)
+
 let toplevel_approx :
   (string, Clambda.value_approximation) Hashtbl.t = Hashtbl.create 16
 
@@ -250,34 +253,6 @@ let global_approx id =
     match get_global_info id with
       | None -> Clambda.Value_unknown
       | Some ui -> get_clambda_approx ui
-
-(* Determination of pack prefixes for units and identifiers *)
-
-let pack_prefix_for_current_unit () =
-  CU.for_pack_prefix current_unit.ui_unit
-
-let pack_prefix_for_global_ident id =
-  if not (Ident.is_global id) then
-    Misc.fatal_errorf "Identifier %a is not global" Ident.print id
-  else if Hashtbl.mem toplevel_approx (Ident.name id) then
-    CU.for_pack_prefix (CU.get_current_exn ())
-  else
-    match get_global_info id with
-    | Some ui -> CU.for_pack_prefix ui.ui_unit
-    | None ->
-      (* If the .cmx file is missing, the prefix is assumed to be empty. *)
-      CU.Prefix.empty
-
-let symbol_for_global' id =
-  assert (Ident.is_global_or_predef id);
-  let pack_prefix =
-    if Ident.is_global id then pack_prefix_for_global_ident id
-    else CU.Prefix.empty
-  in
-  Symbol.for_global_or_predef_ident pack_prefix id
-
-let symbol_for_global id =
-  symbol_for_global' id |> Symbol.linkage_name
 
 (* Register the approximation of the module being compiled *)
 
@@ -351,13 +326,11 @@ let which_cmx_file desired_comp_unit =
 let approx_for_global comp_unit =
   if CU.equal comp_unit CU.predef_exn
   then invalid_arg "approx_for_global with predef_exn compilation unit";
-  let comp_unit_name = which_cmx_file comp_unit in
-  let id = Ident.create_persistent (comp_unit_name |> CU.Name.to_string) in
-  let modname = Ident.name id |> CU.Name.of_string in
+  let modname = which_cmx_file comp_unit in
   match CU.Name.Tbl.find export_infos_table modname with
   | otherwise -> Some otherwise
   | exception Not_found ->
-    match get_global_info id with
+    match get_unit_info modname with
     | None -> None
     | Some ui ->
       let exported = get_flambda_export_info ui in

@@ -22,10 +22,20 @@ module List = Misc.Stdlib.List
 module String = Misc.Stdlib.String
 
 type error =
-  | Invalid_character of char
+  | Invalid_character of char * string
   | Bad_compilation_unit_name of string
 
 exception Error of error
+
+let () =
+  Printexc.register_printer begin function
+  | Error e ->
+    begin match e with
+    | Invalid_character (c, s) -> Some (Format.sprintf "Invalid character '%c' in '%s'" c s)
+    | Bad_compilation_unit_name s -> Some ("Bad compilation unit name: " ^ s)
+    end
+  | _ -> None
+  end
 
 (* CR-someday lmaurer: Move this to [Identifiable] and change /all/ definitions
    of [output] that delegate to [print] to use it. Yes, they're all broken. *)
@@ -43,9 +53,9 @@ module Name : sig
   type t
   include Identifiable.S with type t := t
   val dummy : t
+  val predef_exn : t
   val of_string : string -> t
   val to_string : t -> string
-  val persistent_ident : t -> Ident.t
   val check_as_path_component : t -> unit
 end = struct
   (* Be VERY careful changing this. Anything not equivalent to [string] will
@@ -69,7 +79,7 @@ end = struct
     Char.equal (Char.uppercase_ascii chr) chr
 
   let of_string str =
-    if String.equal str ""
+    if String.equal str "" || String.begins_with str ~prefix:"caml"
     then raise (Error (Bad_compilation_unit_name str))
     else str
 
@@ -84,9 +94,9 @@ end = struct
 
   let dummy = "*dummy*"
 
-  let to_string t = t
+  let predef_exn = "*predef*"
 
-  let persistent_ident t = Ident.create_persistent t
+  let to_string t = t
 end
 
 module Prefix : sig
@@ -94,6 +104,7 @@ module Prefix : sig
   include Identifiable.S with type t := t
   val parse_for_pack : string option -> t
   val from_clflags : unit -> t
+  val of_list : Name.t list -> t
   val to_list : t -> Name.t list
   val to_string : t -> string
   val empty : t
@@ -135,7 +146,7 @@ end = struct
     ListLabels.iter prefix ~f:(fun module_name ->
       String.iteri (fun i c ->
           if not (is_valid_character (i=0) c) then
-            raise (Error (Invalid_character c)))
+            raise (Error (Invalid_character (c, module_name))))
         module_name);
     ListLabels.map prefix ~f:Name.of_string
 
@@ -154,6 +165,8 @@ end = struct
     match t with
     | [] -> true
     | _::_ -> false
+
+  let of_list t = t
 
   let to_list t = t
 end
@@ -176,6 +189,13 @@ let create for_pack_prefix name =
     hash = Hashtbl.hash (name, for_pack_prefix)
   }
 
+let create_child parent name =
+  let prefix =
+    (parent.for_pack_prefix |> Prefix.to_list) @ [ parent.name ]
+    |> Prefix.of_list
+  in
+  create prefix name
+
 let of_string str =
   let for_pack_prefix, name =
     match String.rindex_opt str '.' with
@@ -192,9 +212,11 @@ let of_string str =
 
 let dummy = create Prefix.empty (Name.of_string "*none*")
 
-let predef_exn = create Prefix.empty (Name.of_string "*predef*")
+let predef_exn = create Prefix.empty Name.predef_exn
 
 let name t = t.name
+
+let name_as_string t = name t |> Name.to_string
 
 let for_pack_prefix t = t.for_pack_prefix
 
@@ -242,6 +264,11 @@ let full_path t =
 let is_parent t ~child =
   List.equal Name.equal (full_path t) (Prefix.to_list child.for_pack_prefix)
 
+let can_access_by_name t =
+  let prefix = Prefix.to_list t.for_pack_prefix in
+  let current_prefix = Prefix.to_list (Prefix.from_clflags ()) in
+  List.is_prefix prefix ~of_:current_prefix ~equal:Name.equal
+
 let print_name ppf t =
   Format.fprintf ppf "%a" Name.print t.name
 
@@ -265,7 +292,12 @@ let current = ref None
 let set_current t =
   current := Some t
 
+let clear_current () =
+  current := None
+
 let get_current () = !current
+
+let get_current_or_dummy () = Option.value !current ~default:dummy
 
 let get_current_exn () =
   match !current with
