@@ -22,6 +22,8 @@ type lifter = Flambda.program -> Flambda.program
 type def =
   | Immutable of Variable.t * Flambda.named Flambda.With_free_variables.t
   | Mutable of Mutable_variable.t * Variable.t * Lambda.value_kind
+  | Region
+  | Tail
 
 let rebuild_let (defs : def list) (body : Flambda.t) =
   let module W = Flambda.With_free_variables in
@@ -30,55 +32,231 @@ let rebuild_let (defs : def list) (body : Flambda.t) =
     | Immutable(var, def) ->
         W.create_let_reusing_defining_expr var def body
     | Mutable(var, initial_value, contents_kind) ->
-        Flambda.Let_mutable {var; initial_value; contents_kind; body})
+        Flambda.Let_mutable {var; initial_value; contents_kind; body}
+    | Region ->
+        Flambda.Region body
+    | Tail ->
+        Flambda.Tail body)
     body defs
 
-let rec extract_let_expr (acc:def list) (let_expr:Flambda.let_expr) :
-  def list * Flambda.t Flambda.With_free_variables.t =
+(* Given something like [x = M; y = N], where we intend to produce
+   [let x = M in let y = N in y], try and make [let x = M in N] instead by
+   splitting out the innermost definition. If this isn't possible, say in the
+   case [x = M; Region r; y = N; Tail r], instead just return the variable and
+   the whole definition list. *)
+let split_defs defs var =
+  let use_var () =
+    defs, Flambda.Var var
+  in
+  match defs with
+  | Immutable (var', named) :: defs' when Variable.equal var var' -> begin
+      match Flambda.With_free_variables.contents named with
+      | Expr expr -> defs', expr
+      | _ -> use_var ()
+    end
+  | Immutable (var', _) :: _ ->
+    Misc.fatal_errorf "Expected binding for %a@ but found %a"
+      Variable.print var Variable.print var'
+  | Tail :: _ ->
+    (* The typechecker ensures that the constructed value can escape safely *)
+    use_var ()
+  | (Mutable _ | Region) :: _ | [] ->
+    Misc.fatal_errorf "Expected binding for %a"
+      Variable.print var
+
+let rebuild_expr defs var =
+  let defs, body = split_defs defs var in
+  rebuild_let defs body
+
+let defs_close_region defs =
+  let rec more_tails_than_regions defs tails regions =
+    match defs with
+    | [] -> tails > regions
+    | Tail :: defs -> more_tails_than_regions defs (tails + 1) regions
+    | Region :: defs -> more_tails_than_regions defs tails (regions + 1)
+    | (Immutable _ | Mutable _) :: defs ->
+        more_tails_than_regions defs tails regions
+  in
+  more_tails_than_regions defs 0 0
+
+(* Find the expression bound to the last definition, *)
+let rec find_tail_binding defs var =
+  match defs with
+  | Tail :: defs -> find_tail_binding defs var
+  | Immutable (var', named) :: _ when Variable.equal var var' ->
+      named
+  | (Immutable _ | Mutable _ | Region) :: _ | [] ->
+      Misc.fatal_errorf "expected %a in bindings" Variable.print var
+
+let rec tail_expr_in_expr0 (expr : Flambda.t) ~depth =
+  match expr with
+  | Tail expr -> depth = 0 || tail_expr_in_expr0 expr ~depth:(depth - 1)
+  | Apply { reg_close = Rc_close_at_apply; _ } -> depth = 0
+  | Region expr ->
+      tail_expr_in_expr0 expr ~depth:(depth + 1)
+  | Let { body; _ }
+  | Let_mutable { body; _ }
+  | Let_rec (_, body) ->
+      tail_expr_in_expr0 body ~depth
+  | If_then_else (_, ifso, ifnot, _) ->
+      tail_expr_in_expr0 ifso ~depth || tail_expr_in_expr0 ifnot ~depth
+  | Switch (_, { consts; blocks; failaction; _ }) ->
+      tail_expr_in_cases0 consts ~depth
+      || tail_expr_in_cases0 blocks ~depth
+      ||
+      begin match failaction with
+      | None -> false
+      | Some expr -> tail_expr_in_expr0 expr ~depth
+      end
+  | String_switch (_, cases, failaction, _) ->
+      tail_expr_in_cases0 cases ~depth
+      ||
+      begin match failaction with
+      | None -> false
+      | Some expr -> tail_expr_in_expr0 expr ~depth
+      end
+  | Static_catch (_, _, body, handler, _)
+  | Try_with (body, _, handler, _) ->
+      tail_expr_in_expr0 body ~depth || tail_expr_in_expr0 handler ~depth
+  | Var _
+  | Apply _
+  | Send _
+  | Assign _
+  | Static_raise _
+  | While _
+  | For _
+  | Proved_unreachable ->
+    false
+
+and tail_expr_in_cases0 : 'a. ('a * Flambda.t) list -> depth:int -> bool =
+ fun cases ~depth ->
+  List.exists (fun (_, expr) -> tail_expr_in_expr0 expr ~depth) cases
+
+let tail_expr_in_expr expr = tail_expr_in_expr0 expr ~depth:0
+
+let rec extract_let_expr (acc:def list) dest let_expr =
   let module W = Flambda.With_free_variables in
   let acc =
-    match let_expr with
+    match (let_expr : Flambda.let_expr) with
     | { var = v1; defining_expr = Expr (Let let2); _ } ->
-        let acc, body2 = extract_let_expr acc let2 in
-        Immutable(v1, W.expr body2) :: acc
+        extract_let_expr acc v1 let2
     | { var = v1; defining_expr = Expr (Let_mutable let_mut); _ } ->
-        let acc, body2 = extract_let_mutable acc let_mut in
-        Immutable(v1, W.expr body2) :: acc
+        extract_let_mutable acc v1 let_mut
+    | { var = v1; defining_expr = Expr (Region expr); _ } ->
+        extract_region acc v1 expr
+    | { var = v1;
+        defining_expr = Expr (Apply ({ reg_close = Rc_close_at_apply; _ }
+                                     as apply)) } ->
+        extract_tail_call acc v1 apply
     | { var = v; _ } ->
         Immutable(v, W.of_defining_expr_of_let let_expr) :: acc
   in
   let body = W.of_body_of_let let_expr in
-  extract acc body
+  extract acc dest body
 
-and extract_let_mutable acc (let_mut : Flambda.let_mutable) =
+and extract_let_mutable acc dest let_mut =
   let module W = Flambda.With_free_variables in
   let { Flambda.var; initial_value; contents_kind; body } = let_mut in
   let acc = Mutable(var, initial_value, contents_kind) :: acc in
-  extract acc (W.of_expr body)
+  extract acc dest (W.of_expr body)
 
-and extract acc (expr : Flambda.t Flambda.With_free_variables.t) =
+and extract_region acc dest body =
   let module W = Flambda.With_free_variables in
-  match W.contents expr with
+  (* Ideally, we would recurse with the same [dest] since we're ultimately going
+     to store there anyway. Unfortunately, if [body] has an unliftable tail,
+     we're going to need [inner_dest] as an intermediary. *)
+  let inner_dest = Variable.rename dest in
+  let acc_expr = extract [] inner_dest (W.of_expr body) in
+  let cannot_lift =
+    match find_tail_binding acc_expr inner_dest |> W.contents with
+    | Expr expr -> tail_expr_in_expr expr
+    | _ -> false
+  in
+  begin if cannot_lift then
+    (* There's a tail expression that we can't lift out, so we can't do anything
+       but bundle everything back up in a region. *)
+    let expr =
+      Flambda.Region (rebuild_expr acc_expr inner_dest)
+      |> W.of_expr
+    in
+    Immutable(dest, W.expr expr) :: acc
+  else
+    (* The accumulator must remain balanced between [Region] and [Tail], since
+       it defines a scope into which [extract_let_expr] will move arbitrary
+       computations - if there is a [Region] but no [Tail], this means we're
+       moving those computations into a different region. It may be that
+       [acc_expr] already has a [Tail] (because we lifted it out of [body]), but
+       otherwise we need to add it. *)
+    let need_tail = not (defs_close_region acc_expr) in
+    (* If possible, recover the expression that gets assigned to [inner_dest] so
+       we can directly assign [dest] to it instead *)
+    let acc_expr, body = split_defs acc_expr inner_dest in
+    List.concat
+      [ if need_tail then [ Tail ] else [];
+        [ Immutable (dest, W.expr (W.of_expr body)) ];
+        acc_expr;
+        [ Region ];
+        acc ]
+    end
+
+and extract_tail_call acc dest (apply : Flambda.apply) =
+  let module W = Flambda.With_free_variables in
+  (* Rewrite a close-at-apply call as a normal call in a [Tail] so that we can
+     float the [Tail]. Note that it will still be a tail call in the normal
+     sense (it replaces the old stack frame, etc.), it just no longer has the
+     additional semantics of ending the region first. *)
+  let apply =
+    (* We can safely assume [Rc_normal] makes sense here because the original
+       application was marked [Rc_close_at_apply], so it must be intended to be
+       a tail call and marking it [Rc_nontail] would be silly. *)
+    { apply with reg_close = Rc_normal }
+  in
+  Immutable (dest, W.expr (W.of_expr (Apply apply))) :: Tail :: acc
+
+and extract acc dest expr =
+  let module W = Flambda.With_free_variables in
+  match (W.contents expr : Flambda.t) with
   | Let let_expr ->
-    extract_let_expr acc let_expr
+    extract_let_expr acc dest let_expr
   | Let_mutable let_mutable ->
-    extract_let_mutable acc let_mutable
+    extract_let_mutable acc dest let_mutable
+  | Region expr ->
+    extract_region acc dest expr
+  | Tail expr ->
+    (* One might worry about just adding [Tail] to the accumulator, since in
+       general the accumulator defines a scope into which we're moving arbitrary
+       expressions. In [extract_region], we're careful to make sure the
+       accumulator remains "balanced" between [Region] and [Tail] for this
+       reason. Here we can get away with unconditionally tossing [Tail] onto the
+       accumulator because one of the following must be true:
+
+       1. We are in the tail of a [Region] being handled by [extract_region],
+          which will see that we've added this [Tail] and not add one of
+          its own.
+
+       2. We are in the tail of the entire expression (that is, the argument to
+          [lift_lets_expr]), and thus [expr] is the very last expression we're
+          processing, so nothing else will be moved into this [Tail]. *)
+    extract (Tail :: acc) dest (W.of_expr expr)
+  | Apply ({ reg_close = Rc_close_at_apply; _ } as apply) ->
+    extract_tail_call acc dest apply
   | _ ->
-    acc, expr
+    Immutable (dest, W.expr expr) :: acc
 
 let rec lift_lets_expr (expr:Flambda.t) ~toplevel : Flambda.t =
-  let module W = Flambda.With_free_variables in
   match expr with
   | Let let_expr ->
-    let defs, body = extract_let_expr [] let_expr in
+    let dest = Variable.create Internal_variable_names.lifted_let in
+    let defs = extract_let_expr [] dest let_expr in
     let rev_defs = List.rev_map (lift_lets_def ~toplevel) defs in
-    let body = lift_lets_expr (W.contents body) ~toplevel in
-    rebuild_let (List.rev rev_defs) body
+    rebuild_expr (List.rev rev_defs) dest
   | Let_mutable let_mut ->
-    let defs, body = extract_let_mutable [] let_mut in
+    let dest = Variable.create Internal_variable_names.lifted_let in
+    let defs =
+      extract_let_mutable [] dest let_mut
+    in
     let rev_defs = List.rev_map (lift_lets_def ~toplevel) defs in
-    let body = lift_lets_expr (W.contents body) ~toplevel in
-    rebuild_let (List.rev rev_defs) body
+    rebuild_expr (List.rev rev_defs) dest
   | e ->
     Flambda_iterators.map_subexpressions
       (lift_lets_expr ~toplevel)
@@ -105,6 +283,7 @@ and lift_lets_def def ~toplevel =
         named
     in
     Immutable(var, named)
+  | Region | Tail -> def
 
 and lift_lets_named _var (named:Flambda.named) ~toplevel : Flambda.named =
   match named with

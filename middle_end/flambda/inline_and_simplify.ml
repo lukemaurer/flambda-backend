@@ -680,7 +680,7 @@ and simplify_apply env r ~(apply : Flambda.apply) : Flambda.t * R.t =
      but this is not yet tracked, so we conservatively assume they may.
      Note that tail calls should always set the region used to true, because
      removing the surrounding region would change their meaning. *)
-  let r = R.set_region_use r true in
+  let r = R.set_region_used r in
   let dbg = E.add_inlined_debuginfo env ~dbg in
   simplify_free_variable env lhs_of_application
     ~f:(fun env lhs_of_application lhs_of_application_approx ->
@@ -946,7 +946,7 @@ and simplify_named env r (tree : Flambda.named) : Flambda.named * R.t =
   | Set_of_closures set_of_closures -> begin
     let r =
       match set_of_closures.alloc_mode with
-      | Alloc_local -> R.set_region_use r true
+      | Alloc_local -> R.set_region_used r
       | Alloc_heap -> r
     in
     let set_of_closures, r, first_freshening =
@@ -1042,7 +1042,7 @@ and simplify_named env r (tree : Flambda.named) : Flambda.named * R.t =
       let tree = Flambda.Prim (prim, args, dbg) in
       let r =
         if Semantics_of_primitives.may_locally_allocate prim then
-          R.set_region_use r true
+          R.set_region_used r
         else r
       in
       begin match prim, args, args_approxs with
@@ -1428,16 +1428,22 @@ and simplify env r (tree : Flambda.t) : Flambda.t * R.t =
         let branch, r = simplify env r branch in
         branch, R.map_benefit r B.remove_branch)
   | Region body ->
-     let use_outer_region = R.may_use_region r in
-     let r = R.set_region_use r false in
+     let r = R.enter_region r in
      let body, r = simplify env r body in
      let use_inner_region = R.may_use_region r in
-     let r = R.set_region_use r use_outer_region in
-     if use_inner_region then Region body, r
-     else body, r
+     let r = R.leave_region r in
+     if use_inner_region then Region body, r else body, r
   | Tail body ->
-     let r = R.set_region_use r true in
+     let r = R.leave_region r in
      let body, r = simplify env r body in
+     let r = R.enter_region r in
+     (* Mark the region as used, not necessarily because it's _actually_ being
+        used but because now we won't be able to remove it (as we would also
+        need to remove the [Tail] from this expression and it will be too late).
+        Alternatively, if we could mark the region for deletion, a subsequent
+        pass could both remove the region and strip the [Tail]. In that case, we
+        could restore the old region's state here. *)
+     let r = R.set_region_used r in
      Tail body, r
   | Proved_unreachable -> tree, ret r A.value_bottom
 
