@@ -47,6 +47,7 @@ val strings_of_paths: namespace -> Path.t list -> string list
         avoid name collisions *)
 
 val raw_type_expr: formatter -> type_expr -> unit
+val raw_field : formatter -> row_field -> unit
 val string_of_label: Asttypes.arg_label -> string
 
 val wrap_printing_env: error:bool -> Env.t -> (unit -> 'a) -> 'a
@@ -107,6 +108,12 @@ val type_expr: formatter -> type_expr -> unit
     Any type variables that are shared between multiple types in the input list
     will be given the same name when printed with [prepared_type_expr]. *)
 val prepare_for_printing: type_expr list -> unit
+
+(** [add_type_to_preparation ty] extend a previous type expression preparation
+    to the type expression [ty]
+*)
+val add_type_to_preparation: type_expr -> unit
+
 val prepared_type_expr: formatter -> type_expr -> unit
 (** The function [prepared_type_expr] is a less-safe but more-flexible version
     of [type_expr] that should only be called on [type_expr]s that have been
@@ -235,6 +242,8 @@ val print_items: (Env.t -> signature_item -> 'a option) ->
 (* Simple heuristic to rewrite Foo__bar.* as Foo.Bar.* when Foo.Bar is an alias
    for Foo__bar. This pattern is used by the stdlib. *)
 val rewrite_double_underscore_paths: Env.t -> Path.t -> Path.t
+
+val rewrite_double_underscore_longidents: Env.t -> Longident.t -> Longident.t
 
 (** [printed_signature sourcefile ppf sg] print the signature [sg] of
     [sourcefile] with potential warnings for name collisions *)

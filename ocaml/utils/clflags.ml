@@ -68,6 +68,7 @@ and all_ppx = ref ([] : string list)        (* -ppx *)
 let absname = ref false                 (* -absname *)
 let annotations = ref false             (* -annot *)
 let binary_annotations = ref false      (* -bin-annot *)
+let binary_annotations_cms = ref false  (* -bin-annot-cms *)
 and use_threads = ref false             (* -thread *)
 and noassert = ref false                (* -noassert *)
 and verbose = ref false                 (* -verbose *)
@@ -137,7 +138,6 @@ let profile_columns : Profile.column list ref = ref [] (* -dprofile/-dtimings *)
 
 let native_code = ref false             (* set to true under ocamlopt *)
 
-let force_tmc = ref false               (* -force-tmc *)
 let force_slash = ref false             (* for ocamldep *)
 let clambda_checks = ref false          (* -clambda-checks *)
 let cmm_invariants =
@@ -375,54 +375,6 @@ let set_dumped_pass s enabled =
     in
     dumped_passes_list := dumped_passes
   end
-
-module Extension = struct
-  type t = Comprehensions | Local | Include_functor
-
-  let all = [ Comprehensions; Local; Include_functor ]
-  let default_extensions = [ Local; Include_functor ]
-
-  let extensions = ref ([] : t list)   (* -extension *)
-  let equal (a : t) (b : t) = (a = b)
-
-  let to_string = function
-    | Comprehensions -> "comprehensions"
-    | Local -> "local"
-    | Include_functor -> "include_functor"
-
-  let of_string = function
-    | "comprehensions" -> Comprehensions
-    | "local" -> Local
-    | "include_functor" -> Include_functor
-    | extn -> raise (Arg.Bad(Printf.sprintf "Extension %s is not known" extn))
-
-  let disable_all_extensions = ref false             (* -disable-all-extensions *)
-
-  let disable_all () =
-    disable_all_extensions := true;
-    match !extensions with
-    | [] -> ()
-    | ls ->
-      raise (Arg.Bad(Printf.sprintf
-        "Compiler flag -disable-all-extensions is incompatible with \
-         the enabled extensions: %s"
-        (String.concat "," (List.map to_string ls))))
-
-  let enable extn =
-    if !disable_all_extensions then
-      raise (Arg.Bad(Printf.sprintf
-        "Cannot enable extension %s: \
-         incompatible with compiler flag -disable-all-extensions"
-        extn));
-    let t = of_string (String.lowercase_ascii extn) in
-    if not (List.exists (equal t) !extensions) then
-      extensions := t :: !extensions
-
-  let is_enabled ext =
-    not !disable_all_extensions
-    && (List.mem ext default_extensions
-        || List.mem ext !extensions)
-end
 
 let dump_into_file = ref false (* -dump-into-file *)
 let dump_dir: string option ref = ref None (* -dump-dir *)

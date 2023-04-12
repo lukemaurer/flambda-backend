@@ -40,6 +40,7 @@ odoc_analyse.cmo : \
     ../typing/env.cmi \
     ../utils/config.cmi \
     ../driver/compmisc.cmi \
+    ../utils/compilation_unit.cmi \
     ../utils/clflags.cmi \
     odoc_analyse.cmi
 odoc_analyse.cmx : \
@@ -68,6 +69,7 @@ odoc_analyse.cmx : \
     ../typing/env.cmx \
     ../utils/config.cmx \
     ../driver/compmisc.cmx \
+    ../utils/compilation_unit.cmx \
     ../utils/clflags.cmx \
     odoc_analyse.cmi
 odoc_analyse.cmi : \
@@ -660,6 +662,7 @@ odoc_sig.cmo : \
     ../parsing/longident.cmi \
     ../parsing/location.cmi \
     ../typing/ident.cmi \
+    ../parsing/extensions.cmi \
     ../typing/ctype.cmi \
     ../typing/btype.cmi \
     ../parsing/asttypes.cmi \
@@ -684,6 +687,7 @@ odoc_sig.cmx : \
     ../parsing/longident.cmx \
     ../parsing/location.cmx \
     ../typing/ident.cmx \
+    ../parsing/extensions.cmx \
     ../typing/ctype.cmx \
     ../typing/btype.cmx \
     ../parsing/asttypes.cmi \

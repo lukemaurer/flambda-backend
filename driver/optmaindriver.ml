@@ -18,9 +18,6 @@ open Clflags
 module Backend = struct
   (* See backend_intf.mli. *)
 
-  let pack_prefix_for_global_ident id =
-    Compilenv.pack_prefix_for_global_ident id
-
   let really_import_approx = Import_approx.really_import_approx
   let import_symbol = Import_approx.import_symbol
 
@@ -69,6 +66,7 @@ let main unix argv ppf ~flambda2 =
     Clflags.Opt_flag_handler.set Flambda_backend_flags.opt_flag_handler;
     Compenv.parse_arguments (ref argv) Compenv.anonymous "ocamlopt";
     Compmisc.read_clflags_from_env ();
+    if !Flambda_backend_flags.gc_timings then Gc_timings.start_collection ();
     if !Clflags.plugin then
       Compenv.fatal "-plugin is only supported up to OCaml 4.08.0";
     begin try
@@ -127,7 +125,7 @@ let main unix argv ppf ~flambda2 =
       Compmisc.init_path ();
       let target = Compenv.extract_output !output_name in
       Compmisc.with_ppf_dump ~file_prefix:target (fun ppf_dump ->
-        Asmlink.link_shared ~ppf_dump
+        Asmlink.link_shared unix ~ppf_dump
           (Compenv.get_objfiles ~with_ocamlparam:false) target);
       Warnings.check_fatal ();
     end
@@ -161,5 +159,33 @@ let main unix argv ppf ~flambda2 =
     Location.report_exception ppf x;
     2
   | () ->
+    if !Flambda_backend_flags.gc_timings then begin
+      let minor = Gc_timings.gc_minor_ns () in
+      let major = Gc_timings.gc_major_ns () in
+      let stats = Gc.quick_stat () in
+      let secs x = x *. 1e-9 in
+      let precision = !Clflags.timings_precision in
+      let w2b n = n * (Sys.word_size / 8) in
+      let fw2b x = w2b (Float.to_int x) in
+      Format.fprintf Format.std_formatter "%0.*fs gc\n" precision (secs (minor +. major));
+      Format.fprintf Format.std_formatter "  %0.*fs minor\n" precision (secs minor);
+      Format.fprintf Format.std_formatter "  %0.*fs major\n" precision (secs major);
+      Format.fprintf Format.std_formatter "- heap\n";
+      (* Having minor + major + promoted = total alloc make more sense for
+         hierarchical stats. *)
+      Format.fprintf Format.std_formatter "  %ib alloc\n"
+        (fw2b stats.minor_words + (fw2b stats.major_words - fw2b stats.promoted_words));
+      Format.fprintf Format.std_formatter "    %ib minor\n"
+        (fw2b stats.minor_words - fw2b stats.promoted_words);
+      Format.fprintf Format.std_formatter "    %ib major\n"
+        (fw2b stats.major_words - fw2b stats.promoted_words);
+      Format.fprintf Format.std_formatter "    %ib promoted\n"
+        (fw2b stats.promoted_words);
+      Format.fprintf Format.std_formatter "  %ib top\n" (w2b stats.top_heap_words);
+      Format.fprintf Format.std_formatter "  %i collections\n"
+        (stats.minor_collections + stats.major_collections);
+      Format.fprintf Format.std_formatter "    %i minor\n" stats.minor_collections;
+      Format.fprintf Format.std_formatter "    %i major\n" stats.major_collections;
+    end;
     Profile.print Format.std_formatter !Clflags.profile_columns ~timings_precision:!Clflags.timings_precision;
     0

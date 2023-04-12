@@ -291,24 +291,10 @@ module Make(O : OBJ)(EVP : EVALPATH with type valu = O.t) = struct
                 Oval_list []
           | Tconstr(path, [ty_arg], _)
             when Path.same path Predef.path_array ->
-              let length = O.size obj in
-              if length > 0 then
-                match check_depth depth obj ty with
-                  Some x -> x
-                | None ->
-                    let rec tree_of_items tree_list i =
-                      if !printer_steps < 0 || depth < 0 then
-                        Oval_ellipsis :: tree_list
-                      else if i < length then
-                        let tree =
-                          nest tree_of_val (depth - 1) (O.field obj i) ty_arg
-                        in
-                        tree_of_items (tree :: tree_list) (i + 1)
-                      else tree_list
-                    in
-                    Oval_array (List.rev (tree_of_items [] 0))
-              else
-                Oval_array []
+              tree_of_generic_array Asttypes.Mutable depth obj ty_arg
+          | Tconstr(path, [ty_arg], _)
+            when Path.same path Predef.path_iarray ->
+              tree_of_generic_array Asttypes.Immutable depth obj ty_arg
 
           | Tconstr(path, [], _)
               when Path.same path Predef.path_string ->
@@ -380,9 +366,9 @@ module Make(O : OBJ)(EVP : EVALPATH with type valu = O.t) = struct
               try
                 let decl = Env.find_type path env in
                 match decl with
-                | {type_kind = Type_abstract; type_manifest = None} ->
+                | {type_kind = Type_abstract _; type_manifest = None} ->
                     Oval_stuff "<abstr>"
-                | {type_kind = Type_abstract; type_manifest = Some body} ->
+                | {type_kind = Type_abstract _; type_manifest = Some body} ->
                     tree_of_val depth obj
                       (instantiate_type env decl.type_params ty_list body)
                 | {type_kind = Type_variant (constr_list,rep)} ->
@@ -517,6 +503,27 @@ module Make(O : OBJ)(EVP : EVALPATH with type valu = O.t) = struct
               tree :: tree_list (i + 1) ty_list in
       tree_list start ty_list
 
+      and tree_of_generic_array am depth obj ty_arg =
+        let oval elts = Oval_array (elts, am) in
+        let length = O.size obj in
+        if length > 0 then
+          match check_depth depth obj ty with
+            Some x -> x
+          | None ->
+              let rec tree_of_items tree_list i =
+                if !printer_steps < 0 || depth < 0 then
+                  Oval_ellipsis :: tree_list
+                else if i < length then
+                  let tree =
+                    nest tree_of_val (depth - 1) (O.field obj i) ty_arg
+                  in
+                  tree_of_items (tree :: tree_list) (i + 1)
+                else tree_list
+              in
+              oval (List.rev (tree_of_items [] 0))
+        else
+          oval []
+
       and tree_of_constr_with_args
              tree_of_cstr cstr_name inlined start depth obj ty_args unboxed =
         let lid = tree_of_cstr (Out_name.create cstr_name) in
@@ -581,7 +588,7 @@ module Make(O : OBJ)(EVP : EVALPATH with type valu = O.t) = struct
       with Ctype.Cannot_apply -> abstract_type
 
     and instantiate_types env type_params ty_list args =
-      List.map (instantiate_type env type_params ty_list) args
+      List.map (fun (ty, _) -> instantiate_type env type_params ty_list ty) args
 
     and find_printer depth env ty =
       let rec find = function

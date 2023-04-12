@@ -206,7 +206,11 @@ type nullary_primitive =
       (** Returns a boolean saying whether the given tracing probe is enabled. *)
   | Begin_region
       (** Starting delimiter of local allocation region, returning a region
-          name. *)
+          name. For regions for the "try" part of a "try...with", use
+          [Begin_try_region] (below) instead. *)
+  | Enter_inlined_apply of { dbg : Debuginfo.t }
+      (** Used in classic mode to denote the start of an inlined function body.
+          This is then used in to_cmm to correctly add inlined debuginfo. *)
 
 (** Untagged binary integer arithmetic operations.
 
@@ -246,7 +250,10 @@ type unary_primitive =
   (* CR gbury: Invariant check: 0 < dimension <= 3 *)
   | String_length of string_or_bytes
   | Int_as_pointer
-  | Opaque_identity of { middle_end_only : bool }
+  | Opaque_identity of
+      { middle_end_only : bool;
+        kind : Flambda_kind.t
+      }
   | Int_arith of Flambda_kind.Standard_int.t * unary_int_arith_op
   | Float_arith of unary_float_arith_op
   | Num_conv of
@@ -280,7 +287,8 @@ type unary_primitive =
           closures. *)
   | Project_value_slot of
       { project_from : Function_slot.t;
-        value_slot : Value_slot.t
+        value_slot : Value_slot.t;
+        kind : Flambda_kind.With_subkind.t
       }
       (** Project a value slot from a set of closures -- in other words, read an
           entry from the closure environment (the captured variables). *)
@@ -288,6 +296,9 @@ type unary_primitive =
       (** Only valid when the float array optimisation is enabled. *)
   | Is_flat_float_array
       (** Only valid when the float array optimisation is enabled. *)
+  | Begin_try_region
+      (** Starting delimiter of local allocation region, when used for a "try"
+          body, accepting the parent region as argument. *)
   | End_region
       (** Ending delimiter of local allocation region, accepting a region name. *)
   | Obj_dup  (** Corresponds to [Obj.dup]; see the documentation in obj.mli. *)
@@ -379,6 +390,10 @@ module Without_args : sig
     | Variadic of variadic_primitive
 
   val print : Format.formatter -> t -> unit
+
+  (** Describe the effects and coeffects that the application of the given
+      primitive may have. *)
+  val effects_and_coeffects : t -> Effects_and_coeffects.t
 end
 
 (** A description of the kind of values which a unary primitive expects as its
@@ -432,7 +447,7 @@ val result_kind' : t -> Flambda_kind.t
 
 (** Describe the effects and coeffects that the application of the given
     primitive may have. *)
-val effects_and_coeffects : t -> Effects.t * Coeffects.t
+val effects_and_coeffects : t -> Effects_and_coeffects.t
 
 (** Returns [true] iff the given primitive has neither effects nor coeffects. *)
 val no_effects_or_coeffects : t -> bool

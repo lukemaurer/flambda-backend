@@ -40,6 +40,7 @@ end
 module TypeHash : sig
   include Hashtbl.S with type key = transient_expr
   val add: 'a t -> type_expr -> 'a -> unit
+  val remove : 'a t -> type_expr -> unit
   val find: 'a t -> type_expr -> 'a
   val iter: (type_expr -> 'a -> unit) -> 'a t -> unit
 end
@@ -76,6 +77,8 @@ val newmarkedgenvar: unit -> type_expr
 val is_Tvar: type_expr -> bool
 val is_Tunivar: type_expr -> bool
 val is_Tconstr: type_expr -> bool
+val is_Tpoly: type_expr -> bool
+
 val dummy_method: label
 
 (**** polymorphic variants ****)
@@ -104,6 +107,13 @@ val hash_variant: label -> int
 val proxy: type_expr -> type_expr
         (* Return the proxy representative of the type: either itself
            or a row variable *)
+
+(* Poly types. *)
+
+(* These three functions can only be called on [Tpoly] nodes. *)
+val tpoly_is_mono : type_expr -> bool
+val tpoly_get_mono : type_expr -> type_expr
+val tpoly_get_poly : type_expr -> type_expr * type_expr list
 
 (**** Utilities for private abbreviations with fixed rows ****)
 val row_of_type: type_expr -> type_expr

@@ -46,6 +46,10 @@ include (struct
     | Alloc_heap
     | Alloc_local
 
+  type modify_mode =
+    | Modify_heap
+    | Modify_maybe_stack
+
   let alloc_heap = Alloc_heap
 
   let alloc_local : alloc_mode =
@@ -57,15 +61,38 @@ include (struct
     | Alloc_local, _ | _, Alloc_local -> Alloc_local
     | Alloc_heap, Alloc_heap -> Alloc_heap
 
+  let modify_heap = Modify_heap
+
+  let modify_maybe_stack : modify_mode =
+    (* CR zqian: possible to move this check to a better place? *)
+    (* idealy I don't want to do the checking here.
+       if stack allocations are disabled, then the alloc_mode which this modify_mode
+        depends on should be heap, which makes this modify_mode to be heap *)
+
+    (* one suggestion: move the check to optimize_allocation;
+      if stack_allocation not enabled, force all allocations to be heap,
+        which then propagates to all the other modes.
+       *)
+    if Config.stack_allocation then Modify_maybe_stack
+    else Modify_heap
+
 end : sig
 
   type alloc_mode = private
     | Alloc_heap
     | Alloc_local
 
+  type modify_mode = private
+    | Modify_heap
+    | Modify_maybe_stack
+
   val alloc_heap : alloc_mode
 
   val alloc_local : alloc_mode
+
+  val modify_heap : modify_mode
+
+  val modify_maybe_stack : modify_mode
 
   val join_mode : alloc_mode -> alloc_mode -> alloc_mode
 
@@ -93,7 +120,7 @@ let eq_mode a b =
   | Alloc_local, Alloc_heap -> false
 
 type initialization_or_assignment =
-  | Assignment of alloc_mode
+  | Assignment of modify_mode
   | Heap_initialization
   | Root_initialization
 
@@ -206,12 +233,19 @@ type primitive =
   (* Integer to external pointer *)
   | Pint_as_pointer
   (* Inhibition of optimisation *)
-  | Popaque
+  | Popaque of layout
   (* Statically-defined probes *)
   | Pprobe_is_enabled of { name: string }
   (* Primitives for [Obj] *)
   | Pobj_dup
-  | Pobj_magic
+  | Pobj_magic of layout
+  | Punbox_float
+  | Pbox_float of alloc_mode
+  | Punbox_int of boxed_integer
+  | Pbox_int of boxed_integer * alloc_mode
+  (* Jane Street extensions *)
+  | Parray_to_iarray
+  | Parray_of_iarray
 
 and integer_comparison =
     Ceq | Cne | Clt | Cgt | Cle | Cge
@@ -226,6 +260,13 @@ and value_kind =
       non_consts : (int * value_kind list) list;
     }
   | Parrayval of array_kind
+
+and layout =
+  | Ptop
+  | Pvalue of value_kind
+  | Punboxed_float
+  | Punboxed_int of boxed_integer
+  | Pbottom
 
 and block_shape =
   value_kind list option
@@ -286,6 +327,34 @@ let rec equal_value_kind x y =
   | (Pgenval | Pfloatval | Pboxedintval _ | Pintval | Pvariant _
       | Parrayval _), _ -> false
 
+let equal_layout x y =
+  match x, y with
+  | Pvalue x, Pvalue y -> equal_value_kind x y
+  | Ptop, Ptop -> true
+  | Pbottom, Pbottom -> true
+  | _, _ -> false
+
+let compatible_layout x y =
+  match x, y with
+  | Pbottom, _
+  | _, Pbottom -> true
+  | Pvalue _, Pvalue _ -> true
+  | Punboxed_float, Punboxed_float -> true
+  | Punboxed_int bi1, Punboxed_int bi2 ->
+      equal_boxed_integer bi1 bi2
+  | Ptop, Ptop -> true
+  | Ptop, _ | _, Ptop -> false
+  | (Pvalue _ | Punboxed_float | Punboxed_int _), _ -> false
+
+let must_be_value layout =
+  match layout with
+  | Pvalue v -> v
+  | Pbottom ->
+      (* Here, we want to get the [value_kind] corresponding to
+         a [Pbottom] layout. Anything will do, we return [Pgenval]
+         as a default. *)
+      Pgenval
+  | _ -> Misc.fatal_error "Layout is not a value"
 
 type structured_constant =
     Const_base of constant
@@ -396,6 +465,8 @@ let equal_meth_kind x y =
 
 type shared_code = (int * int) list
 
+type static_label = int
+
 type function_attribute = {
   inline : inline_attribute;
   specialise : specialise_attribute;
@@ -416,32 +487,32 @@ type lambda =
   | Lconst of structured_constant
   | Lapply of lambda_apply
   | Lfunction of lfunction
-  | Llet of let_kind * value_kind * Ident.t * lambda * lambda
-  | Lmutlet of value_kind * Ident.t * lambda * lambda
+  | Llet of let_kind * layout * Ident.t * lambda * lambda
+  | Lmutlet of layout * Ident.t * lambda * lambda
   | Lletrec of (Ident.t * lambda) list * lambda
   | Lprim of primitive * lambda list * scoped_location
-  | Lswitch of lambda * lambda_switch * scoped_location * value_kind
+  | Lswitch of lambda * lambda_switch * scoped_location * layout
   | Lstringswitch of
-      lambda * (string * lambda) list * lambda option * scoped_location * value_kind
-  | Lstaticraise of int * lambda list
-  | Lstaticcatch of lambda * (int * (Ident.t * value_kind) list) * lambda * value_kind
-  | Ltrywith of lambda * Ident.t * lambda * value_kind
-  | Lifthenelse of lambda * lambda * lambda * value_kind
+      lambda * (string * lambda) list * lambda option * scoped_location * layout
+  | Lstaticraise of static_label * lambda list
+  | Lstaticcatch of lambda * (static_label * (Ident.t * layout) list) * lambda * layout
+  | Ltrywith of lambda * Ident.t * lambda * layout
+  | Lifthenelse of lambda * lambda * lambda * layout
   | Lsequence of lambda * lambda
   | Lwhile of lambda_while
   | Lfor of lambda_for
   | Lassign of Ident.t * lambda
   | Lsend of
       meth_kind * lambda * lambda * lambda list
-      * region_close * alloc_mode * scoped_location
+      * region_close * alloc_mode * scoped_location * layout
   | Levent of lambda * lambda_event
   | Lifused of Ident.t * lambda
-  | Lregion of lambda
+  | Lregion of lambda * layout
 
 and lfunction =
   { kind: function_kind;
-    params: (Ident.t * value_kind) list;
-    return: value_kind;
+    params: (Ident.t * layout) list;
+    return: layout;
     body: lambda;
     attr: function_attribute; (* specified with [@inline] attribute *)
     loc: scoped_location;
@@ -467,6 +538,7 @@ and lambda_for =
 and lambda_apply =
   { ap_func : lambda;
     ap_args : lambda list;
+    ap_result_layout : layout;
     ap_region_close : region_close;
     ap_mode : alloc_mode;
     ap_loc : scoped_location;
@@ -494,12 +566,11 @@ and lambda_event_kind =
   | Lev_after of Types.type_expr
   | Lev_function
   | Lev_pseudo
-  | Lev_module_definition of Ident.t
 
 type program =
-  { module_ident : Ident.t;
+  { compilation_unit : Compilation_unit.t;
     main_module_block_size : int;
-    required_globals : Ident.Set.t;
+    required_globals : Compilation_unit.Set.t;
     code : lambda }
 
 let const_int n = Const_base (Const_int n)
@@ -537,6 +608,32 @@ let lfunction ~kind ~params ~return ~body ~attr ~loc ~mode ~region =
   Lfunction { kind; params; return; body; attr; loc; mode; region }
 
 let lambda_unit = Lconst const_unit
+
+let layout_unit = Pvalue Pintval
+let layout_int = Pvalue Pintval
+let layout_array kind = Pvalue (Parrayval kind)
+let layout_block = Pvalue Pgenval
+let layout_list =
+  Pvalue (Pvariant { consts = [0] ; non_consts = [0, [Pgenval; Pgenval]] })
+let layout_field = Pvalue Pgenval
+let layout_exception = Pvalue Pgenval
+let layout_function = Pvalue Pgenval
+let layout_object = Pvalue Pgenval
+let layout_class = Pvalue Pgenval
+let layout_module = Pvalue Pgenval
+let layout_module_field = Pvalue Pgenval
+let layout_functor = Pvalue Pgenval
+let layout_float = Pvalue Pfloatval
+let layout_string = Pvalue Pgenval
+let layout_boxedint bi = Pvalue (Pboxedintval bi)
+let layout_lazy = Pvalue Pgenval
+let layout_lazy_contents = Pvalue Pgenval
+let layout_any_value = Pvalue Pgenval
+let layout_letrec = layout_any_value
+
+(* CR ncourant: use [Ptop] or remove this as soon as possible. *)
+let layout_top = layout_any_value
+let layout_bottom = Pbottom
 
 let default_function_attribute = {
   inline = Default_inline;
@@ -620,10 +717,10 @@ let make_key e =
         Lsequence (tr_rec env e1,tr_rec env e2)
     | Lassign (x,e) ->
         Lassign (x,tr_rec env e)
-    | Lsend (m,e1,e2,es,pos,mo,_loc) ->
-        Lsend (m,tr_rec env e1,tr_rec env e2,tr_recs env es,pos,mo,Loc_unknown)
+    | Lsend (m,e1,e2,es,pos,mo,_loc,layout) ->
+        Lsend (m,tr_rec env e1,tr_rec env e2,tr_recs env es,pos,mo,Loc_unknown,layout)
     | Lifused (id,e) -> Lifused (id,tr_rec env e)
-    | Lregion e -> Lregion (tr_rec env e)
+    | Lregion (e,layout) -> Lregion (tr_rec env e,layout)
     | Lletrec _|Lfunction _
     | Lfor _ | Lwhile _
 (* Beware: (PR#6412) the event argument to Levent
@@ -649,21 +746,21 @@ let make_key e =
 
 (***************)
 
-let name_lambda strict arg fn =
+let name_lambda strict arg layout fn =
   match arg with
     Lvar id -> fn id
   | _ ->
       let id = Ident.create_local "let" in
-      Llet(strict, Pgenval, id, arg, fn id)
+      Llet(strict, layout, id, arg, fn id)
 
 let name_lambda_list args fn =
   let rec name_list names = function
     [] -> fn (List.rev names)
-  | (Lvar _ as arg) :: rem ->
+  | (Lvar _ as arg, _) :: rem ->
       name_list (arg :: names) rem
-  | arg :: rem ->
+  | (arg, layout) :: rem ->
       let id = Ident.create_local "let" in
-      Llet(Strict, Pgenval, id, arg, name_list (Lvar id :: names) rem) in
+      Llet(Strict, layout, id, arg, name_list (Lvar id :: names) rem) in
   name_list [] args
 
 
@@ -716,13 +813,13 @@ let shallow_iter ~tail ~non_tail:f = function
       f for_from; f for_to; f for_body
   | Lassign(_, e) ->
       f e
-  | Lsend (_k, met, obj, args, _, _, _) ->
+  | Lsend (_k, met, obj, args, _, _, _, _) ->
       List.iter f (met::obj::args)
   | Levent (e, _evt) ->
       tail e
   | Lifused (_v, e) ->
       tail e
-  | Lregion e ->
+  | Lregion (e, _) ->
       f e
 
 let iter_head_constructor f l =
@@ -795,7 +892,7 @@ let rec free_variables = function
            (Ident.Set.remove for_id (free_variables for_body)))
   | Lassign(id, e) ->
       Ident.Set.add id (free_variables e)
-  | Lsend (_k, met, obj, args, _, _, _) ->
+  | Lsend (_k, met, obj, args, _, _, _, _) ->
       free_variables_list
         (Ident.Set.union (free_variables met) (free_variables obj))
         args
@@ -804,7 +901,7 @@ let rec free_variables = function
   | Lifused (_v, e) ->
       (* Shouldn't v be considered a free variable ? *)
       free_variables e
-  | Lregion e ->
+  | Lregion (e, _) ->
       free_variables e
 
 and free_variables_list set exprs =
@@ -839,17 +936,10 @@ let rec patch_guarded patch = function
 (* Translate an access path *)
 
 let rec transl_address loc = function
-  | Env.Aident id ->
+  | Env.Aunit cu -> Lprim(Pgetglobal cu, [], loc)
+  | Env.Alocal id ->
       if Ident.is_predef id
       then Lprim (Pgetpredef id, [], loc)
-      else if Ident.is_global id
-      then
-        (* Prefixes are currently always empty *)
-        let cu =
-          Compilation_unit.create Compilation_unit.Prefix.empty
-            (Ident.name id |> Compilation_unit.Name.of_string)
-        in
-        Lprim(Pgetglobal cu, [], loc)
       else Lvar id
   | Env.Adot(addr, pos) ->
       Lprim(Pfield (pos, Reads_agree), [transl_address loc addr], loc)
@@ -984,9 +1074,9 @@ let subst update_env ?(freshen_bound_variables = false) s input_lam =
         assert (not (Ident.Map.mem id s));
         let id = try Ident.Map.find id l with Not_found -> id in
         Lassign(id, subst s l e)
-    | Lsend (k, met, obj, args, pos, mode, loc) ->
+    | Lsend (k, met, obj, args, pos, mode, loc, layout) ->
         Lsend (k, subst s l met, subst s l obj, subst_list s l args,
-               pos, mode, loc)
+               pos, mode, loc, layout)
     | Levent (lam, evt) ->
         let old_env = evt.lev_env in
         let env_updates =
@@ -1016,8 +1106,8 @@ let subst update_env ?(freshen_bound_variables = false) s input_lam =
     | Lifused (id, e) ->
         let id = try Ident.Map.find id l with Not_found -> id in
         Lifused (id, subst s l e)
-    | Lregion e ->
-        Lregion (subst s l e)
+    | Lregion (e, layout) ->
+        Lregion (subst s l e, layout)
   and subst_list s l li = List.map (subst s l) li
   and subst_decl s l (id, exp) = (id, subst s l exp)
   and subst_case s l (key, case) = (key, subst s l case)
@@ -1047,11 +1137,12 @@ let shallow_map ~tail ~non_tail:f = function
   | Lvar _
   | Lmutvar _
   | Lconst _ as lam -> lam
-  | Lapply { ap_func; ap_args; ap_region_close; ap_mode; ap_loc; ap_tailcall;
+  | Lapply { ap_func; ap_args; ap_result_layout; ap_region_close; ap_mode; ap_loc; ap_tailcall;
              ap_inlined; ap_specialised; ap_probe } ->
       Lapply {
         ap_func = f ap_func;
         ap_args = List.map f ap_args;
+        ap_result_layout;
         ap_region_close;
         ap_mode;
         ap_loc;
@@ -1063,10 +1154,10 @@ let shallow_map ~tail ~non_tail:f = function
   | Lfunction { kind; params; return; body; attr; loc; mode; region } ->
       Lfunction { kind; params; return; body = f body; attr; loc;
                   mode; region }
-  | Llet (str, k, v, e1, e2) ->
-      Llet (str, k, v, f e1, tail e2)
-  | Lmutlet (k, v, e1, e2) ->
-      Lmutlet (k, v, f e1, tail e2)
+  | Llet (str, layout, v, e1, e2) ->
+      Llet (str, layout, v, f e1, tail e2)
+  | Lmutlet (layout, v, e1, e2) ->
+      Lmutlet (layout, v, f e1, tail e2)
   | Lletrec (idel, e2) ->
       Lletrec (List.map (fun (v, e) -> (v, f e)) idel, tail e2)
   | Lprim (Psequand as p, [l1; l2], loc)
@@ -1074,7 +1165,7 @@ let shallow_map ~tail ~non_tail:f = function
       Lprim(p, [f l1; tail l2], loc)
   | Lprim (p, el, loc) ->
       Lprim (p, List.map f el, loc)
-  | Lswitch (e, sw, loc,kind) ->
+  | Lswitch (e, sw, loc, layout) ->
       Lswitch (f e,
                { sw_numconsts = sw.sw_numconsts;
                  sw_consts = List.map (fun (n, e) -> (n, tail e)) sw.sw_consts;
@@ -1082,21 +1173,21 @@ let shallow_map ~tail ~non_tail:f = function
                  sw_blocks = List.map (fun (n, e) -> (n, tail e)) sw.sw_blocks;
                  sw_failaction = Option.map tail sw.sw_failaction;
                },
-               loc,kind)
-  | Lstringswitch (e, sw, default, loc,kind) ->
+               loc, layout)
+  | Lstringswitch (e, sw, default, loc, layout) ->
       Lstringswitch (
         f e,
         List.map (fun (s, e) -> (s, tail e)) sw,
         Option.map tail default,
-        loc, kind)
+        loc, layout)
   | Lstaticraise (i, args) ->
       Lstaticraise (i, List.map f args)
-  | Lstaticcatch (body, id, handler, kind) ->
-      Lstaticcatch (tail body, id, tail handler, kind)
-  | Ltrywith (e1, v, e2, kind) ->
-      Ltrywith (f e1, v, tail e2, kind)
-  | Lifthenelse (e1, e2, e3, kind) ->
-      Lifthenelse (f e1, tail e2, tail e3, kind)
+  | Lstaticcatch (body, id, handler, layout) ->
+      Lstaticcatch (tail body, id, tail handler, layout)
+  | Ltrywith (e1, v, e2, layout) ->
+      Ltrywith (f e1, v, tail e2, layout)
+  | Lifthenelse (e1, e2, e3, layout) ->
+      Lifthenelse (f e1, tail e2, tail e3, layout)
   | Lsequence (e1, e2) ->
       Lsequence (f e1, tail e2)
   | Lwhile lw ->
@@ -1108,14 +1199,14 @@ let shallow_map ~tail ~non_tail:f = function
                      for_body = f lf.for_body }
   | Lassign (v, e) ->
       Lassign (v, f e)
-  | Lsend (k, m, o, el, pos, mode, loc) ->
-      Lsend (k, f m, f o, List.map f el, pos, mode, loc)
+  | Lsend (k, m, o, el, pos, mode, loc, layout) ->
+      Lsend (k, f m, f o, List.map f el, pos, mode, loc, layout)
   | Levent (l, ev) ->
       Levent (tail l, ev)
   | Lifused (v, e) ->
       Lifused (v, tail e)
-  | Lregion e ->
-      Lregion (f e)
+  | Lregion (e, layout) ->
+      Lregion (f e, layout)
 
 let map f =
   let rec g lam = f (shallow_map ~tail:g ~non_tail:g lam) in
@@ -1123,13 +1214,10 @@ let map f =
 
 (* To let-bind expressions to variables *)
 
-let bind_with_value_kind str (var, kind) exp body =
+let bind_with_layout str (var, layout) exp body =
   match exp with
     Lvar var' when Ident.same var var' -> body
-  | _ -> Llet(str, kind, var, exp, body)
-
-let bind str var exp body =
-  bind_with_value_kind str (var, Pgenval) exp body
+  | _ -> Llet(str, layout, var, exp, body)
 
 let negate_integer_comparison = function
   | Ceq -> Cne
@@ -1218,7 +1306,9 @@ let mod_setfield pos =
   Psetfield (pos, Pointer, Root_initialization)
 
 let primitive_may_allocate : primitive -> alloc_mode option = function
-  | Pbytes_to_string | Pbytes_of_string | Pignore -> None
+  | Pbytes_to_string | Pbytes_of_string
+  | Parray_to_iarray | Parray_of_iarray
+  | Pignore -> None
   | Pgetglobal _ | Psetglobal _ | Pgetpredef _ -> None
   | Pmakeblock (_, _, _, m) -> Some m
   | Pmakefloatblock (_, m) -> Some m
@@ -1292,7 +1382,134 @@ let primitive_may_allocate : primitive -> alloc_mode option = function
   | Pbswap16 -> None
   | Pbbswap (_, m) -> Some m
   | Pint_as_pointer -> None
-  | Popaque -> None
+  | Popaque _ -> None
   | Pprobe_is_enabled _ -> None
   | Pobj_dup -> Some alloc_heap
-  | Pobj_magic -> None
+  | Pobj_magic _ -> None
+  | Punbox_float | Punbox_int _ -> None
+  | Pbox_float m | Pbox_int (_, m) -> Some m
+
+let constant_layout = function
+  | Const_int _ | Const_char _ -> Pvalue Pintval
+  | Const_string _ -> Pvalue Pgenval
+  | Const_int32 _ -> Pvalue (Pboxedintval Pint32)
+  | Const_int64 _ -> Pvalue (Pboxedintval Pint64)
+  | Const_nativeint _ -> Pvalue (Pboxedintval Pnativeint)
+  | Const_float _ -> Pvalue Pfloatval
+
+let structured_constant_layout = function
+  | Const_base const -> constant_layout const
+  | Const_block _ | Const_immstring _ -> Pvalue Pgenval
+  | Const_float_array _ | Const_float_block _ -> Pvalue (Parrayval Pfloatarray)
+
+let primitive_result_layout (p : primitive) =
+  match p with
+  | Popaque layout | Pobj_magic layout -> layout
+  | Pbytes_to_string | Pbytes_of_string -> layout_string
+  | Pignore | Psetfield _ | Psetfield_computed _ | Psetfloatfield _ | Poffsetref _
+  | Pbytessetu | Pbytessets | Parraysetu _ | Parraysets _ | Pbigarrayset _
+  | Pbytes_set_16 _ | Pbytes_set_32 _ | Pbytes_set_64 _
+  | Pbigstring_set_16 _ | Pbigstring_set_32 _ | Pbigstring_set_64 _
+    -> layout_unit
+  | Pgetglobal _ | Psetglobal _ | Pgetpredef _ -> layout_module_field
+  | Pmakeblock _ | Pmakefloatblock _ | Pmakearray _ | Pduprecord _
+  | Pduparray _ | Pbigarraydim _ | Pobj_dup -> layout_block
+  | Pfield _ | Pfield_computed _ -> layout_field
+  | Pfloatfield _ | Pfloatofint _ | Pnegfloat _ | Pabsfloat _
+  | Paddfloat _ | Psubfloat _ | Pmulfloat _ | Pdivfloat _
+  | Pbox_float _ -> layout_float
+  | Punbox_float -> Punboxed_float
+  | Pccall _p ->
+      (* CR ncourant: use native_repr *)
+      layout_any_value
+  | Praise _ -> layout_bottom
+  | Psequor | Psequand | Pnot
+  | Pnegint | Paddint | Psubint | Pmulint
+  | Pdivint _ | Pmodint _
+  | Pandint | Porint | Pxorint
+  | Plslint | Plsrint | Pasrint
+  | Pintcomp _
+  | Pcompare_ints | Pcompare_floats | Pcompare_bints _
+  | Poffsetint _ | Pintoffloat | Pfloatcomp _
+  | Pstringlength | Pstringrefu | Pstringrefs
+  | Pbyteslength | Pbytesrefu | Pbytesrefs
+  | Parraylength _ | Pisint _ | Pisout | Pintofbint _
+  | Pbintcomp _
+  | Pstring_load_16 _ | Pbytes_load_16 _ | Pbigstring_load_16 _
+  | Pprobe_is_enabled _ | Pbswap16
+    -> layout_int
+  | Parrayrefu array_kind | Parrayrefs array_kind ->
+      (match array_kind with
+       | Pintarray -> layout_int
+       | Pfloatarray -> layout_float
+       | Pgenarray | Paddrarray -> layout_field)
+  | Pbintofint (bi, _) | Pcvtbint (_,bi,_)
+  | Pnegbint (bi, _) | Paddbint (bi, _) | Psubbint (bi, _)
+  | Pmulbint (bi, _) | Pdivbint {size = bi} | Pmodbint {size = bi}
+  | Pandbint (bi, _) | Porbint (bi, _) | Pxorbint (bi, _)
+  | Plslbint (bi, _) | Plsrbint (bi, _) | Pasrbint (bi, _)
+  | Pbbswap (bi, _) | Pbox_int (bi, _) ->
+      layout_boxedint bi
+  | Punbox_int bi -> Punboxed_int bi
+  | Pstring_load_32 _ | Pbytes_load_32 _ | Pbigstring_load_32 _ ->
+      layout_boxedint Pint32
+  | Pstring_load_64 _ | Pbytes_load_64 _ | Pbigstring_load_64 _ ->
+      layout_boxedint Pint64
+  | Pbigarrayref (_, _, kind, _) ->
+      begin match kind with
+      | Pbigarray_unknown -> layout_any_value
+      | Pbigarray_float32 | Pbigarray_float64 -> layout_float
+      | Pbigarray_sint8 | Pbigarray_uint8
+      | Pbigarray_sint16 | Pbigarray_uint16
+      | Pbigarray_caml_int -> layout_int
+      | Pbigarray_int32 -> layout_boxedint Pint32
+      | Pbigarray_int64 -> layout_boxedint Pint64
+      | Pbigarray_native_int -> layout_boxedint Pnativeint
+      | Pbigarray_complex32 | Pbigarray_complex64 ->
+          layout_block
+      end
+  | Pctconst (
+      Big_endian | Word_size | Int_size | Max_wosize
+      | Ostype_unix | Ostype_cygwin | Ostype_win32 | Backend_type
+    ) ->
+      (* Compile-time constants only ever return ints for now,
+         enumerate them all to be sure to modify this if it becomes wrong. *)
+      layout_int
+  | Pint_as_pointer ->
+      (* CR ncourant: use an unboxed int64 here when it exists *)
+      layout_any_value
+  | (Parray_to_iarray | Parray_of_iarray) -> layout_any_value
+
+let rec compute_expr_layout kinds lam =
+  match lam with
+  | Lvar id | Lmutvar id ->
+    begin
+      try Ident.Map.find id kinds
+      with Not_found ->
+        Misc.fatal_errorf "Unbound layout for variable %a" Ident.print id
+    end
+  | Lconst cst -> structured_constant_layout cst
+  | Lfunction _ -> layout_function
+  | Lapply { ap_result_layout; _ } -> ap_result_layout
+  | Lsend (_, _, _, _, _, _, _, layout) -> layout
+  | Llet(_, kind, id, _, body) | Lmutlet(kind, id, _, body) ->
+    compute_expr_layout (Ident.Map.add id kind kinds) body
+  | Lletrec(defs, body) ->
+    let kinds =
+      List.fold_left (fun kinds (id, _) -> Ident.Map.add id layout_letrec kinds)
+        kinds defs
+    in
+    compute_expr_layout kinds body
+  | Lprim(p, _, _) ->
+    primitive_result_layout p
+  | Lswitch(_, _, _, kind) | Lstringswitch(_, _, _, _, kind)
+  | Lstaticcatch(_, _, _, kind) | Ltrywith(_, _, _, kind)
+  | Lifthenelse(_, _, _, kind) | Lregion (_, kind) ->
+    kind
+  | Lstaticraise (_, _) ->
+    layout_bottom
+  | Lsequence(_, body) | Levent(body, _) -> compute_expr_layout kinds body
+  | Lwhile _ | Lfor _ | Lassign _ -> layout_unit
+  | Lifused _ ->
+      assert false
+

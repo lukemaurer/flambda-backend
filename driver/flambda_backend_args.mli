@@ -28,6 +28,7 @@ module type Flambda_backend_options = sig
   val dcfg_equivalence_check : unit -> unit
 
   val reorder_blocks_random : int -> unit
+  val basic_block_sections : unit -> unit
 
   val dasm_comments : unit -> unit
   val dno_asm_comments : unit -> unit
@@ -37,12 +38,19 @@ module type Flambda_backend_options = sig
   val dcheckmach : unit -> unit
 
   val disable_poll_insertion : unit -> unit
+  val enable_poll_insertion : unit -> unit
+
   val long_frames : unit -> unit
   val no_long_frames : unit -> unit
   val long_frames_threshold : int -> unit
 
+  val caml_apply_inline_fast_path : unit -> unit
   val internal_assembler : unit -> unit
 
+  val gc_timings : unit -> unit
+
+  val flambda2_debug : unit -> unit
+  val no_flambda2_debug : unit -> unit
   val flambda2_join_points : unit -> unit
   val no_flambda2_join_points : unit -> unit
   val flambda2_result_types_functors_only : unit -> unit
@@ -64,6 +72,7 @@ module type Flambda_backend_options = sig
   val flambda2_expert_max_unboxing_depth : int -> unit
   val flambda2_expert_can_inline_recursive_functions : unit -> unit
   val no_flambda2_expert_can_inline_recursive_functions : unit -> unit
+  val flambda2_expert_max_function_simplify_run : int -> unit
   val flambda2_debug_concrete_types_only_on_canonicals : unit -> unit
   val no_flambda2_debug_concrete_types_only_on_canonicals : unit -> unit
   val flambda2_debug_keep_invalid_handlers : unit -> unit
@@ -88,8 +97,10 @@ module type Flambda_backend_options = sig
   val flambda2_unicode : unit -> unit
 
   val drawfexpr : unit -> unit
+  val drawfexpr_to : string -> unit
   val dfexpr : unit -> unit
-  val dflexpect : unit -> unit
+  val dfexpr_to : string -> unit
+  val dflexpect_to : string -> unit
   val dslot_offsets : unit -> unit
   val dfreshen : unit -> unit
   val dflow : unit -> unit
@@ -97,10 +108,10 @@ end
 
 (** Command line arguments required for ocamlopt.*)
 module type Debugging_options = sig
-  val _restrict_to_upstream_dwarf : unit -> unit
-  val _no_restrict_to_upstream_dwarf : unit -> unit
-  val _dwarf_for_startup_file : unit -> unit
-  val _no_dwarf_for_startup_file : unit -> unit
+  val restrict_to_upstream_dwarf : unit -> unit
+  val no_restrict_to_upstream_dwarf : unit -> unit
+  val dwarf_for_startup_file : unit -> unit
+  val no_dwarf_for_startup_file : unit -> unit
 end
 
 (** Command line arguments required for ocamlopt. *)

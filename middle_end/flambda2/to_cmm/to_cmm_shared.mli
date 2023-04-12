@@ -16,12 +16,24 @@
     this module, unlike the ones in [Cmm_helpers], depend on Flambda 2 data
     types. *)
 
+val remove_var_with_provenance :
+  To_cmm_env.free_vars -> Backend_var.With_provenance.t -> To_cmm_env.free_vars
+
+val remove_vars_with_machtype :
+  To_cmm_env.free_vars ->
+  (Backend_var.With_provenance.t * Cmm.machtype) list ->
+  To_cmm_env.free_vars
+
 val exttype_of_kind : Flambda_kind.t -> Cmm.exttype
 
-val machtype_of_kind : Flambda_kind.t -> Cmm.machtype_component array
+val machtype_of_kind : Flambda_kind.With_subkind.t -> Cmm.machtype
 
-val machtype_of_kinded_parameter :
-  Bound_parameter.t -> Cmm.machtype_component array
+val extended_machtype_of_kind :
+  Flambda_kind.With_subkind.t -> Cmm_helpers.Extended_machtype.t
+
+val machtype_of_kinded_parameter : Bound_parameter.t -> Cmm.machtype
+
+val memory_chunk_of_kind : Flambda_kind.With_subkind.t -> Cmm.memory_chunk
 
 (** Create a constant int expression from a targetint. *)
 val targetint : dbg:Debuginfo.t -> Targetint_32_64.t -> Cmm.expression
@@ -37,9 +49,7 @@ val symbol : dbg:Debuginfo.t -> Symbol.t -> Cmm.expression
 
 (** This does not inline effectful expressions. *)
 val name :
-  To_cmm_env.t ->
-  Name.t ->
-  Cmm.expression * To_cmm_env.t * Effects_and_coeffects.t
+  To_cmm_env.t -> To_cmm_result.t -> Name.t -> To_cmm_env.translation_result
 
 val const : dbg:Debuginfo.t -> Reg_width_const.t -> Cmm.expression
 
@@ -50,8 +60,9 @@ val simple :
   ?consider_inlining_effectful_expressions:bool ->
   dbg:Debuginfo.t ->
   To_cmm_env.t ->
+  To_cmm_result.t ->
   Simple.t ->
-  Cmm.expression * To_cmm_env.t * Effects_and_coeffects.t
+  To_cmm_env.translation_result
 
 val simple_static :
   Simple.t -> [`Data of Cmm.data_item list | `Var of Variable.t]
@@ -62,8 +73,13 @@ val simple_list :
   ?consider_inlining_effectful_expressions:bool ->
   dbg:Debuginfo.t ->
   To_cmm_env.t ->
+  To_cmm_result.t ->
   Simple.t list ->
-  Cmm.expression list * To_cmm_env.t * Effects_and_coeffects.t
+  Cmm.expression list
+  * To_cmm_env.free_vars
+  * To_cmm_env.t
+  * To_cmm_result.t
+  * Effects_and_coeffects.t
 
 val bound_parameters :
   To_cmm_env.t ->
@@ -76,14 +92,16 @@ val invalid :
 (** Make an update to a statically-allocated block. *)
 val make_update :
   To_cmm_env.t ->
+  To_cmm_result.t ->
   Debuginfo.t ->
   Cmm.memory_chunk ->
   symbol:Cmm.expression ->
   Variable.t ->
   index:int ->
-  prev_updates:Cmm.expression option ->
-  To_cmm_env.t * Cmm.expression option
+  prev_updates:To_cmm_env.expr_with_info option ->
+  To_cmm_env.t * To_cmm_result.t * To_cmm_env.expr_with_info option
 
 val check_arity : Flambda_arity.With_subkinds.t -> _ list -> bool
 
-val machtype_of_return_arity : Flambda_arity.t -> Cmm.machtype
+val extended_machtype_of_return_arity :
+  Flambda_arity.With_subkinds.t -> Cmm_helpers.Extended_machtype.t

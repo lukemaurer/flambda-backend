@@ -22,7 +22,8 @@ type t =
 
 let [@ocamlformat "disable"] print ppf
       { function_decls;
-        value_slots;alloc_mode;
+        value_slots;
+        alloc_mode;
       } =
   Format.fprintf ppf "@[<hov 1>(%tset_of_closures%t@ \
       @[<hov 1>(function_decls@ %a)@]@ \

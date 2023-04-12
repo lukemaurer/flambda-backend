@@ -95,18 +95,30 @@ and value_kind' ppf = function
   | Pvariant { consts; non_consts; } ->
     variant_kind value_kind' ppf ~consts ~non_consts
 
+let layout ppf layout =
+  match layout with
+  | Pvalue k -> value_kind ppf k
+  | Ptop -> fprintf ppf "[top]"
+  | Pbottom -> fprintf ppf "[bottom]"
+  | Punboxed_float -> fprintf ppf "[unboxed_float]"
+  | Punboxed_int bi -> fprintf ppf "[unboxed_%s]" (boxed_integer_name bi)
+
 let return_kind ppf (mode, kind) =
   let smode = alloc_mode mode in
   match kind with
-  | Pgenval when is_heap_mode mode -> ()
-  | Pgenval -> fprintf ppf ": %s@ " smode
-  | Pintval -> fprintf ppf ": int@ "
-  | Pfloatval -> fprintf ppf ": %sfloat@ " smode
-  | Parrayval elt_kind ->
+  | Pvalue Pgenval when is_heap_mode mode -> ()
+  | Pvalue Pgenval -> fprintf ppf ": %s@ " smode
+  | Pvalue Pintval -> fprintf ppf ": int@ "
+  | Pvalue Pfloatval -> fprintf ppf ": %sfloat@ " smode
+  | Pvalue (Parrayval elt_kind) ->
      fprintf ppf ": %s%sarray@ " smode (array_kind elt_kind)
-  | Pboxedintval bi -> fprintf ppf ": %s%s@ " smode (boxed_integer_name bi)
-  | Pvariant { consts; non_consts; } ->
+  | Pvalue (Pboxedintval bi) -> fprintf ppf ": %s%s@ " smode (boxed_integer_name bi)
+  | Pvalue (Pvariant { consts; non_consts; }) ->
     variant_kind value_kind' ppf ~consts ~non_consts
+  | Punboxed_float -> fprintf ppf ": unboxed_float@ "
+  | Punboxed_int bi -> fprintf ppf ": unboxed_%s@ " (boxed_integer_name bi)
+  | Ptop -> fprintf ppf ": top@ "
+  | Pbottom -> fprintf ppf ": bottom@ "
 
 let field_kind ppf = function
   | Pgenval -> pp_print_string ppf "*"
@@ -252,8 +264,8 @@ let primitive ppf = function
         match init with
         | Heap_initialization -> "(heap-init)"
         | Root_initialization -> "(root-init)"
-        | Assignment Alloc_heap -> ""
-        | Assignment Alloc_local -> "(local)"
+        | Assignment Modify_heap -> ""
+        | Assignment Modify_maybe_stack -> "(maybe-stack)"
       in
       fprintf ppf "setfield_%s%s %i" instr init n
   | Psetfield_computed (ptr, init) ->
@@ -266,8 +278,8 @@ let primitive ppf = function
         match init with
         | Heap_initialization -> "(heap-init)"
         | Root_initialization -> "(root-init)"
-        | Assignment Alloc_heap -> ""
-        | Assignment Alloc_local -> "(local)"
+        | Assignment Modify_heap -> ""
+        | Assignment Modify_maybe_stack -> "(maybe-stack)"
       in
       fprintf ppf "setfield_%s%s_computed" instr init
   | Pfloatfield (n, sem, mode) ->
@@ -278,8 +290,8 @@ let primitive ppf = function
         match init with
         | Heap_initialization -> "(heap-init)"
         | Root_initialization -> "(root-init)"
-        | Assignment Alloc_heap -> ""
-        | Assignment Alloc_local -> "(local)"
+        | Assignment Modify_heap -> ""
+        | Assignment Modify_maybe_stack -> "(maybe-stack)"
       in
       fprintf ppf "setfloatfield%s %i" init n
   | Pduprecord (rep, size) -> fprintf ppf "duprecord %a %i" record_rep rep size
@@ -435,10 +447,18 @@ let primitive ppf = function
   | Pbswap16 -> fprintf ppf "bswap16"
   | Pbbswap(bi,m) -> print_boxed_integer "bswap" ppf bi m
   | Pint_as_pointer -> fprintf ppf "int_as_pointer"
-  | Popaque -> fprintf ppf "opaque"
+  | Popaque _ -> fprintf ppf "opaque"
   | Pprobe_is_enabled {name} -> fprintf ppf "probe_is_enabled[%s]" name
   | Pobj_dup -> fprintf ppf "obj_dup"
-  | Pobj_magic -> fprintf ppf "obj_magic"
+  | Pobj_magic _ -> fprintf ppf "obj_magic"
+  | Punbox_float -> fprintf ppf "unbox_float"
+  | Pbox_float m -> fprintf ppf "box_float%s" (alloc_kind m)
+  | Punbox_int bi -> fprintf ppf "unbox_%s" (boxed_integer_name bi)
+  | Pbox_int (bi, m) ->
+      fprintf ppf "box_%s%s" (boxed_integer_name bi) (alloc_kind m)
+
+  | Parray_to_iarray -> fprintf ppf "array_to_iarray"
+  | Parray_of_iarray -> fprintf ppf "array_of_iarray"
 
 let name_of_primitive = function
   | Pbytes_of_string -> "Pbytes_of_string"
@@ -543,10 +563,16 @@ let name_of_primitive = function
   | Pbswap16 -> "Pbswap16"
   | Pbbswap _ -> "Pbbswap"
   | Pint_as_pointer -> "Pint_as_pointer"
-  | Popaque -> "Popaque"
+  | Popaque _ -> "Popaque"
   | Pprobe_is_enabled _ -> "Pprobe_is_enabled"
   | Pobj_dup -> "Pobj_dup"
-  | Pobj_magic -> "Pobj_magic"
+  | Pobj_magic _ -> "Pobj_magic"
+  | Punbox_float -> "Punbox_float"
+  | Pbox_float _ -> "Pbox_float"
+  | Punbox_int _ -> "Punbox_int"
+  | Pbox_int _ -> "Pbox_int"
+  | Parray_of_iarray -> "Parray_of_iarray"
+  | Parray_to_iarray -> "Parray_to_iarray"
 
 let check_attribute ppf check =
   let check_property = function
@@ -644,9 +670,10 @@ let rec lam ppf = function
   | Lfunction{kind; params; return; body; attr; mode; region} ->
       let pr_params ppf params =
         match kind with
-        | Curried _ ->
+        | Curried {nlocal} ->
+            fprintf ppf "@ {nlocal = %d}" nlocal;
             List.iter (fun (param, k) ->
-                fprintf ppf "@ %a%a" Ident.print param value_kind k) params
+                fprintf ppf "@ %a%a" Ident.print param layout k) params
         | Tupled ->
             fprintf ppf " (";
             let first = ref true in
@@ -654,7 +681,7 @@ let rec lam ppf = function
               (fun (param, k) ->
                 if !first then first := false else fprintf ppf ",@ ";
                 Ident.print ppf param;
-                value_kind ppf k)
+                layout ppf k)
               params;
             fprintf ppf ")" in
       let rmode = if region then alloc_heap else alloc_local in
@@ -676,7 +703,7 @@ let rec lam ppf = function
         | Lmutlet(k, id, arg, body) as l ->
            if sp then fprintf ppf "@ ";
            fprintf ppf "@[<2>%a =%s%a@ %a@]"
-             Ident.print id (let_kind l) value_kind k lam arg;
+             Ident.print id (let_kind l) layout k lam arg;
            letbody ~sp:true body
         | expr -> expr in
       fprintf ppf "@[<2>(let@ @[<hv 1>(";
@@ -744,7 +771,7 @@ let rec lam ppf = function
         lam lbody i
         (fun ppf vars ->
            List.iter
-             (fun (x, k) -> fprintf ppf " %a%a" Ident.print x value_kind k)
+             (fun (x, k) -> fprintf ppf " %a%a" Ident.print x layout k)
              vars
         )
         vars
@@ -769,7 +796,7 @@ let rec lam ppf = function
        lam for_to (alloc_mode mode) lam for_body
   | Lassign(id, expr) ->
       fprintf ppf "@[<2>(assign@ %a@ %a)@]" Ident.print id lam expr
-  | Lsend (k, met, obj, largs, pos, reg, _) ->
+  | Lsend (k, met, obj, largs, pos, reg, _, _) ->
       let args ppf largs =
         List.iter (fun l -> fprintf ppf "@ %a" lam l) largs in
       let kind =
@@ -783,8 +810,6 @@ let rec lam ppf = function
        | Lev_after _  -> "after"
        | Lev_function -> "funct-body"
        | Lev_pseudo -> "pseudo"
-       | Lev_module_definition ident ->
-         Format.asprintf "module-defn(%a)" Ident.print ident
       in
       (* -dno-locations also hides the placement of debug events;
          this is good for the readability of the resulting output (usually
@@ -806,7 +831,7 @@ let rec lam ppf = function
       end
   | Lifused(id, expr) ->
       fprintf ppf "@[<2>(ifused@ %a@ %a)@]" Ident.print id lam expr
-  | Lregion expr ->
+  | Lregion (expr, _) ->
       fprintf ppf "@[<2>(region@ %a)@]" lam expr
 
 and sequence ppf = function

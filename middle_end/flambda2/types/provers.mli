@@ -120,7 +120,7 @@ val meet_is_flat_float_array :
 val meet_is_immutable_array :
   Typing_env.t ->
   Type_grammar.t ->
-  (Flambda_kind.With_subkind.t Or_unknown.t
+  (Flambda_kind.With_subkind.t Or_unknown_or_bottom.t
   * Type_grammar.t
   * Alloc_mode.For_types.t)
   meet_shortcut
@@ -218,7 +218,7 @@ val prove_alloc_mode_of_boxed_number :
   Typing_env.t -> Type_grammar.t -> Alloc_mode.For_types.t proof_of_property
 
 val never_holds_locally_allocated_values :
-  Typing_env.t -> Variable.t -> Flambda_kind.t -> unit proof_of_property
+  Typing_env.t -> Variable.t -> unit proof_of_property
 
 val prove_physical_equality :
   Typing_env.t -> Type_grammar.t -> Type_grammar.t -> bool proof_of_property

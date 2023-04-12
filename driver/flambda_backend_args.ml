@@ -16,6 +16,12 @@
 let format_default flag = if flag then " (default)" else ""
 let format_not_default flag = if flag then "" else " (default)"
 
+let mk_flambda2_debug f =
+  "-flambda2-debug", Arg.Unit f, " Enable debug output for the Flambda2 pass"
+
+let mk_no_flambda2_debug f =
+  "-no-flambda2-debug", Arg.Unit f, " Disable debug output for the Flambda2 pass"
+
 let mk_ocamlcfg f =
   "-ocamlcfg", Arg.Unit f, " Use ocamlcfg"
 
@@ -38,6 +44,19 @@ let mk_reorder_blocks_random f =
   Arg.Int f,
   Printf.sprintf "<seed> Randomly reorder basic blocks in every function, \
                   using the provided seed (intended for testing, off by default)."
+
+let mk_basic_block_sections f =
+  if Config.function_sections then
+    "-basic-block-sections",  Arg.Unit f,
+    " Emit each basic block in a separate section if target supports it. Requires \
+     -ocamlcfg."
+  else
+    let err () =
+      raise (Arg.Bad "OCaml has been configured without support for \
+                      -function-sections which is required for -basic-block-sections")
+    in
+    "-basic-block-sections", Arg.Unit err, " (option not available)"
+;;
 
 let mk_dasm_comments f =
   "-dasm-comments", Arg.Unit f, " Add comments in .s files (e.g. for DWARF)"
@@ -62,6 +81,9 @@ let mk_dcheckmach f =
 let mk_disable_poll_insertion f =
   "-disable-poll-insertion", Arg.Unit f, " Do not insert poll points"
 
+let mk_enable_poll_insertion f =
+  "-enable-poll-insertion", Arg.Unit f, " Insert poll points"
+
 let mk_long_frames f =
   "-long-frames", Arg.Unit f, " Allow stack frames longer than 2^16 bytes"
 
@@ -71,11 +93,17 @@ let mk_no_long_frames f =
 let mk_debug_long_frames_threshold f =
   "-debug-long-frames-threshold", Arg.Int f, "n debug only: set long frames threshold"
 
+let mk_caml_apply_inline_fast_path f =
+  "-caml-apply-inline-fast-path", Arg.Unit f, " Inline the fast path of caml_applyN"
+
 let mk_dump_inlining_paths f =
   "-dump-inlining-paths", Arg.Unit f, " Dump inlining paths when dumping flambda2 terms"
 
 let mk_internal_assembler f =
   "-internal-assembler", Arg.Unit f, "Write object files directly instead of using the system assembler (x86-64 ELF only)"
+
+let mk_gc_timings f =
+  "-dgc-timings", Arg.Unit f, "Output information about time spent in the GC"
 
 module Flambda2 = Flambda_backend_flags.Flambda2
 
@@ -243,6 +271,13 @@ let mk_no_flambda2_expert_can_inline_recursive_functions f =
     (format_not_default Flambda2.Expert.Default.can_inline_recursive_functions)
 ;;
 
+let mk_flambda2_expert_max_function_simplify_run f =
+  "-flambda2-expert-max-function-simplify-run", Arg.Int f,
+  Printf.sprintf " Do not run simplification of function more\n\
+      \     than this (default %d) (Flambda 2 only)"
+    Flambda2.Expert.Default.max_function_simplify_run
+;;
+
 let mk_flambda2_debug_concrete_types_only_on_canonicals f =
   "-flambda2-debug-concrete-types-only-on-canonicals", Arg.Unit f,
   Printf.sprintf " Check that concrete\n\
@@ -390,14 +425,24 @@ let mk_drawfexpr f =
     \     (Flambda 2 only)"
 ;;
 
+let mk_drawfexpr_to f =
+  "-drawfexpr-to", Arg.String f,
+  "<file> Like -drawfexpr but dumps to given file (Flambda 2 only)"
+;;
+
 let mk_dfexpr f =
   "-dfexpr", Arg.Unit f, " Like -dflambda but outputs fexpr language\n\
     \     (Flambda 2 only)"
 ;;
 
-let mk_dflexpect f =
-  "-dflexpect", Arg.Unit f, " Like -dflambda but outputs a .flt file\n\
-    \     whose basename matches that of the input .ml file (Flambda 2 only)"
+let mk_dfexpr_to f =
+  "-dfexpr-to", Arg.String f,
+  "<file> Like -dfexpr but dumps to given file (Flambda 2 only)"
+;;
+
+let mk_dflexpect_to f =
+  "-dflexpect-to", Arg.String f,
+  "<file> Combine -drawfexpr and -dfexpr in an .flt file (Flambda 2 only)"
 ;;
 
 let mk_dslot_offsets f =
@@ -451,6 +496,7 @@ module type Flambda_backend_options = sig
   val dcfg_equivalence_check : unit -> unit
 
   val reorder_blocks_random : int -> unit
+  val basic_block_sections : unit -> unit
 
   val dasm_comments : unit -> unit
   val dno_asm_comments : unit -> unit
@@ -460,13 +506,19 @@ module type Flambda_backend_options = sig
   val dcheckmach : unit -> unit
 
   val disable_poll_insertion : unit -> unit
+  val enable_poll_insertion : unit -> unit
 
   val long_frames : unit -> unit
   val no_long_frames : unit -> unit
   val long_frames_threshold : int -> unit
 
+  val caml_apply_inline_fast_path : unit -> unit
   val internal_assembler : unit -> unit
 
+  val gc_timings : unit -> unit
+
+  val flambda2_debug : unit -> unit
+  val no_flambda2_debug : unit -> unit
   val flambda2_join_points : unit -> unit
   val no_flambda2_join_points : unit -> unit
   val flambda2_result_types_functors_only : unit -> unit
@@ -488,6 +540,7 @@ module type Flambda_backend_options = sig
   val flambda2_expert_max_unboxing_depth : int -> unit
   val flambda2_expert_can_inline_recursive_functions : unit -> unit
   val no_flambda2_expert_can_inline_recursive_functions : unit -> unit
+  val flambda2_expert_max_function_simplify_run : int -> unit
   val flambda2_debug_concrete_types_only_on_canonicals : unit -> unit
   val no_flambda2_debug_concrete_types_only_on_canonicals : unit -> unit
   val flambda2_debug_keep_invalid_handlers : unit -> unit
@@ -512,8 +565,10 @@ module type Flambda_backend_options = sig
   val flambda2_unicode : unit -> unit
 
   val drawfexpr : unit -> unit
+  val drawfexpr_to : string -> unit
   val dfexpr : unit -> unit
-  val dflexpect : unit -> unit
+  val dfexpr_to : string -> unit
+  val dflexpect_to : string -> unit
   val dslot_offsets : unit -> unit
   val dfreshen : unit -> unit
   val dflow : unit -> unit
@@ -530,6 +585,7 @@ struct
     mk_dcfg_equivalence_check F.dcfg_equivalence_check;
 
     mk_reorder_blocks_random F.reorder_blocks_random;
+    mk_basic_block_sections F.basic_block_sections;
 
     mk_dasm_comments F.dasm_comments;
     mk_dno_asm_comments F.dno_asm_comments;
@@ -539,13 +595,20 @@ struct
     mk_dcheckmach F.dcheckmach;
 
     mk_disable_poll_insertion F.disable_poll_insertion;
+    mk_enable_poll_insertion F.enable_poll_insertion;
 
     mk_long_frames F.long_frames;
     mk_no_long_frames F.no_long_frames;
     mk_debug_long_frames_threshold F.long_frames_threshold;
 
+    mk_caml_apply_inline_fast_path F.caml_apply_inline_fast_path;
+
     mk_internal_assembler F.internal_assembler;
 
+    mk_gc_timings F.gc_timings;
+
+    mk_flambda2_debug F.flambda2_debug;
+    mk_no_flambda2_debug F.no_flambda2_debug;
     mk_flambda2_join_points F.flambda2_join_points;
     mk_no_flambda2_join_points F.no_flambda2_join_points;
     mk_flambda2_result_types_functors_only
@@ -583,6 +646,8 @@ struct
       F.flambda2_expert_can_inline_recursive_functions;
     mk_no_flambda2_expert_can_inline_recursive_functions
       F.no_flambda2_expert_can_inline_recursive_functions;
+    mk_flambda2_expert_max_function_simplify_run
+      F.flambda2_expert_max_function_simplify_run;
     mk_flambda2_debug_concrete_types_only_on_canonicals
       F.flambda2_debug_concrete_types_only_on_canonicals;
     mk_no_flambda2_debug_concrete_types_only_on_canonicals
@@ -615,8 +680,10 @@ struct
     mk_flambda2_unicode F.flambda2_unicode;
 
     mk_drawfexpr F.drawfexpr;
+    mk_drawfexpr_to F.drawfexpr_to;
     mk_dfexpr F.dfexpr;
-    mk_dflexpect F.dflexpect;
+    mk_dfexpr_to F.dfexpr_to;
+    mk_dflexpect_to F.dflexpect_to;
     mk_dslot_offsets F.dslot_offsets;
     mk_dfreshen F.dfreshen;
     mk_dflow F.dflow;
@@ -638,6 +705,8 @@ module Flambda_backend_options_impl = struct
 
   let reorder_blocks_random seed =
     Flambda_backend_flags.reorder_blocks_random := Some seed
+  let basic_block_sections () =
+    set' Flambda_backend_flags.basic_block_sections ()
 
   let dasm_comments =
     set' Flambda_backend_flags.dasm_comments
@@ -653,13 +722,21 @@ module Flambda_backend_options_impl = struct
   let dcheckmach = set' Flambda_backend_flags.dump_checkmach
 
   let disable_poll_insertion = set' Flambda_backend_flags.disable_poll_insertion
+  let enable_poll_insertion = clear' Flambda_backend_flags.disable_poll_insertion
 
   let long_frames =  set' Flambda_backend_flags.allow_long_frames
   let no_long_frames = clear' Flambda_backend_flags.allow_long_frames
   let long_frames_threshold n = set_long_frames_threshold n
 
+  let caml_apply_inline_fast_path =
+    set' Flambda_backend_flags.caml_apply_inline_fast_path
+
   let internal_assembler = set' Flambda_backend_flags.internal_assembler
 
+  let gc_timings = set' Flambda_backend_flags.gc_timings
+
+  let flambda2_debug = set' Flambda_backend_flags.Flambda2.debug
+  let no_flambda2_debug = clear' Flambda_backend_flags.Flambda2.debug
   let flambda2_join_points = set Flambda2.join_points
   let no_flambda2_join_points = clear Flambda2.join_points
   let flambda2_result_types_functors_only () =
@@ -698,6 +775,8 @@ module Flambda_backend_options_impl = struct
     Flambda2.Expert.can_inline_recursive_functions := Flambda_backend_flags.Set true
   let no_flambda2_expert_can_inline_recursive_functions () =
     Flambda2.Expert.can_inline_recursive_functions := Flambda_backend_flags.Set false
+  let flambda2_expert_max_function_simplify_run runs =
+    Flambda2.Expert.max_function_simplify_run := Flambda_backend_flags.Set runs
   let flambda2_debug_concrete_types_only_on_canonicals =
     set' Flambda2.Debug.concrete_types_only_on_canonicals
   let no_flambda2_debug_concrete_types_only_on_canonicals =
@@ -775,38 +854,40 @@ module Flambda_backend_options_impl = struct
 
   let flambda2_unicode = set Flambda2.unicode
 
-  let drawfexpr = set' Flambda2.Dump.rawfexpr
-  let dfexpr = set' Flambda2.Dump.fexpr
-  let dflexpect = set' Flambda2.Dump.flexpect
+  let drawfexpr () = Flambda2.Dump.rawfexpr := Flambda2.Dump.Main_dump_stream
+  let drawfexpr_to file = Flambda2.Dump.rawfexpr := Flambda2.Dump.File file
+  let dfexpr () = Flambda2.Dump.fexpr := Flambda2.Dump.Main_dump_stream
+  let dfexpr_to file = Flambda2.Dump.fexpr := Flambda2.Dump.File file
+  let dflexpect_to file = Flambda2.Dump.flexpect := Flambda2.Dump.File file
   let dslot_offsets = set' Flambda2.Dump.slot_offsets
   let dfreshen = set' Flambda2.Dump.freshen
   let dflow = set' Flambda2.Dump.flow
 end
 
 module type Debugging_options = sig
-  val _restrict_to_upstream_dwarf : unit -> unit
-  val _no_restrict_to_upstream_dwarf : unit -> unit
-  val _dwarf_for_startup_file : unit -> unit
-  val _no_dwarf_for_startup_file : unit -> unit
+  val restrict_to_upstream_dwarf : unit -> unit
+  val no_restrict_to_upstream_dwarf : unit -> unit
+  val dwarf_for_startup_file : unit -> unit
+  val no_dwarf_for_startup_file : unit -> unit
 end
 
 module Make_debugging_options (F : Debugging_options) = struct
   let list3 = [
-    mk_restrict_to_upstream_dwarf F._restrict_to_upstream_dwarf;
-    mk_no_restrict_to_upstream_dwarf F._no_restrict_to_upstream_dwarf;
-    mk_dwarf_for_startup_file F._dwarf_for_startup_file;
-    mk_no_dwarf_for_startup_file F._no_dwarf_for_startup_file;
+    mk_restrict_to_upstream_dwarf F.restrict_to_upstream_dwarf;
+    mk_no_restrict_to_upstream_dwarf F.no_restrict_to_upstream_dwarf;
+    mk_dwarf_for_startup_file F.dwarf_for_startup_file;
+    mk_no_dwarf_for_startup_file F.no_dwarf_for_startup_file;
    ]
 end
 
 module Debugging_options_impl = struct
-  let _restrict_to_upstream_dwarf () =
+  let restrict_to_upstream_dwarf () =
     Debugging.restrict_to_upstream_dwarf := true
-  let _no_restrict_to_upstream_dwarf () =
+  let no_restrict_to_upstream_dwarf () =
     Debugging.restrict_to_upstream_dwarf := false
-  let _dwarf_for_startup_file () =
+  let dwarf_for_startup_file () =
     Debugging.dwarf_for_startup_file := true
-  let _no_dwarf_for_startup_file () =
+  let no_dwarf_for_startup_file () =
     Debugging.dwarf_for_startup_file := false
 end
 
@@ -842,21 +923,20 @@ module Extra_params = struct
       end;
       true
     in
-    let clear' option =
-      Compenv.setter ppf (fun b -> b) name [ option ] v; false
-    in
     match name with
     | "internal-assembler" -> set' Flambda_backend_flags.internal_assembler
+    | "dgc-timings" -> set' Flambda_backend_flags.gc_timings
     | "ocamlcfg" -> set' Flambda_backend_flags.use_ocamlcfg
     | "cfg-invariants" -> set' Flambda_backend_flags.cfg_invariants
     | "cfg-equivalence-check" -> set' Flambda_backend_flags.cfg_equivalence_check
     | "dump-inlining-paths" -> set' Flambda_backend_flags.dump_inlining_paths
     | "reorder-blocks-random" ->
        set_int_option' Flambda_backend_flags.reorder_blocks_random
+    | "basic-block-sections" -> set' Flambda_backend_flags.basic_block_sections
     | "heap-reduction-threshold" -> set_int' Flambda_backend_flags.heap_reduction_threshold
     | "alloc-check" -> set' Flambda_backend_flags.alloc_check
     | "dump-checkmach" -> set' Flambda_backend_flags.dump_checkmach
-    | "disable-poll-insertion" -> set' Flambda_backend_flags.disable_poll_insertion
+    | "poll-insertion" -> set' Flambda_backend_flags.disable_poll_insertion
     | "long-frames" -> set' Flambda_backend_flags.allow_long_frames
     | "debug-long-frames-threshold" ->
       begin match Compenv.check_int ppf name v with
@@ -867,12 +947,12 @@ module Extra_params = struct
              (Printf.sprintf "Expected integer between 0 and %d"
                 Flambda_backend_flags.max_long_frames_threshold))
       end
+    | "caml-apply-inline-fast-path" ->
+      set' Flambda_backend_flags.caml_apply_inline_fast_path
     | "dasm-comments" -> set' Flambda_backend_flags.dasm_comments
-    | "dno-asm-comments" -> clear' Flambda_backend_flags.dasm_comments
     | "gupstream-dwarf" -> set' Debugging.restrict_to_upstream_dwarf
-    | "gno-upstream-dwarf" -> clear' Debugging.restrict_to_upstream_dwarf
     | "gstartup" -> set' Debugging.dwarf_for_startup_file
-    | "gno-startup" -> clear' Debugging.dwarf_for_startup_file
+    | "flambda2-debug" -> set' Flambda_backend_flags.Flambda2.debug
     | "flambda2-join-points" -> set Flambda2.join_points
     | "flambda2-result-types" ->
       (match String.lowercase_ascii v with
@@ -905,6 +985,8 @@ module Extra_params = struct
        set_int Flambda2.Expert.max_unboxing_depth
     | "flambda2-expert-can-inline-recursive-functions" ->
        set Flambda2.Expert.can_inline_recursive_functions
+    | "flambda2-expert-max-function-simplify-run" ->
+       set_int Flambda2.Expert.max_function_simplify_run
     | "flambda2-inline-max-depth" ->
        Clflags.Int_arg_helper.parse v
          "Bad syntax in OCAMLPARAM for 'flambda2-inline-max-depth'"

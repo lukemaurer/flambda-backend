@@ -495,7 +495,12 @@ let meet_is_flat_float_array env t : bool meet_shortcut =
   | Value Unknown -> Need_meet
   | Value Bottom -> Invalid
   | Value (Ok (Array { element_kind = Unknown; _ })) -> Need_meet
-  | Value (Ok (Array { element_kind = Known element_kind; _ })) -> (
+  | Value (Ok (Array { element_kind = Bottom; _ })) ->
+    (* Empty array case. We cannot return Invalid, but any other result is
+       correct. We arbitrarily pick [false], as this is what we would get if we
+       looked at the tag at runtime. *)
+    Known_result false
+  | Value (Ok (Array { element_kind = Ok element_kind; _ })) -> (
     match K.With_subkind.kind element_kind with
     | Value -> Known_result false
     | Naked_number Naked_float -> Known_result true
@@ -520,7 +525,11 @@ let prove_is_immediates_array env t : unit proof_of_property =
   match expand_head env t with
   | Value (Unknown | Bottom) -> Unknown
   | Value (Ok (Array { element_kind = Unknown; _ })) -> Unknown
-  | Value (Ok (Array { element_kind = Known element_kind; _ })) -> (
+  | Value (Ok (Array { element_kind = Bottom; _ })) ->
+    (* Empty array case. We cannot return Invalid, but it's correct to state
+       that any value contained in this array must be an immediate. *)
+    Proved ()
+  | Value (Ok (Array { element_kind = Ok element_kind; _ })) -> (
     match K.With_subkind.subkind element_kind with
     | Tagged_immediate -> Proved ()
     | Anything | Boxed_float | Boxed_int32 | Boxed_int64 | Boxed_nativeint
@@ -806,33 +815,37 @@ let prove_alloc_mode_of_boxed_number env t :
   | Naked_nativeint _ | Rec_info _ | Region _ ->
     wrong_kind "Value" t
 
-let never_holds_locally_allocated_values env var kind : _ proof_of_property =
-  let t = TE.find env (Name.var var) (Some kind) in
-  match expand_head env t with
-  | Value (Ok (Variant { blocks; _ })) -> (
-    match blocks with
-    | Unknown -> Unknown
-    | Known blocks -> (
-      if TG.Row_like_for_blocks.is_bottom blocks
-      then Proved ()
-      else
-        match blocks.alloc_mode with
-        | Heap -> Proved ()
-        | Local | Heap_or_local -> Unknown))
-  | Value (Ok (Boxed_float (_, alloc_mode)))
-  | Value (Ok (Boxed_int32 (_, alloc_mode)))
-  | Value (Ok (Boxed_int64 (_, alloc_mode)))
-  | Value (Ok (Boxed_nativeint (_, alloc_mode)))
-  | Value (Ok (Mutable_block { alloc_mode }))
-  | Value (Ok (Closures { alloc_mode; _ }))
-  | Value (Ok (Array { alloc_mode; _ })) -> (
-    match alloc_mode with Heap -> Proved () | Local | Heap_or_local -> Unknown)
-  | Value (Ok (String _)) -> Proved ()
-  | Value Unknown -> Unknown
-  | Value Bottom -> Unknown
-  | Naked_immediate _ | Naked_float _ | Naked_int32 _ | Naked_int64 _
-  | Naked_nativeint _ | Rec_info _ | Region _ ->
-    Proved ()
+let never_holds_locally_allocated_values env var : _ proof_of_property =
+  match TE.find_or_missing env (Name.var var) with
+  | None -> Unknown
+  | Some ty -> (
+    match expand_head env ty with
+    | Value (Ok (Variant { blocks; _ })) -> (
+      match blocks with
+      | Unknown -> Unknown
+      | Known blocks -> (
+        if TG.Row_like_for_blocks.is_bottom blocks
+        then Proved ()
+        else
+          match blocks.alloc_mode with
+          | Heap -> Proved ()
+          | Local | Heap_or_local -> Unknown))
+    | Value (Ok (Boxed_float (_, alloc_mode)))
+    | Value (Ok (Boxed_int32 (_, alloc_mode)))
+    | Value (Ok (Boxed_int64 (_, alloc_mode)))
+    | Value (Ok (Boxed_nativeint (_, alloc_mode)))
+    | Value (Ok (Mutable_block { alloc_mode }))
+    | Value (Ok (Closures { alloc_mode; _ }))
+    | Value (Ok (Array { alloc_mode; _ })) -> (
+      match alloc_mode with
+      | Heap -> Proved ()
+      | Local | Heap_or_local -> Unknown)
+    | Value (Ok (String _)) -> Proved ()
+    | Value Unknown -> Unknown
+    | Value Bottom -> Unknown
+    | Naked_immediate _ | Naked_float _ | Naked_int32 _ | Naked_int64 _
+    | Naked_nativeint _ | Rec_info _ | Region _ ->
+      Proved ())
 
 let prove_physical_equality env t1 t2 =
   let incompatible_naked_numbers t1 t2 =

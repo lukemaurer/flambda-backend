@@ -31,10 +31,11 @@ UTILS = \
   utils/identifiable.cmo \
   utils/numbers.cmo \
   utils/arg_helper.cmo \
-  utils/clflags.cmo \
-  utils/profile.cmo \
   utils/local_store.cmo \
   utils/load_path.cmo \
+  utils/clflags.cmo \
+  utils/language_extension.cmo \
+  utils/profile.cmo \
   utils/terminfo.cmo \
   utils/ccomp.cmo \
   utils/warnings.cmo \
@@ -47,6 +48,7 @@ UTILS = \
   utils/target_system.cmo \
   typing/ident.cmo \
   utils/compilation_unit.cmo utils/linkage_name.cmo utils/symbol.cmo \
+  utils/import_info.cmo \
   utils/lazy_backtrack.cmo \
   utils/diffing.cmo \
   utils/diffing_with_keys.cmo
@@ -58,8 +60,9 @@ PARSING = \
   parsing/docstrings.cmo \
   parsing/syntaxerr.cmo \
   parsing/ast_helper.cmo \
+  parsing/extensions_parsing.cmo parsing/extensions.cmo \
   parsing/pprintast.cmo \
-  parsing/extensions.cmo \
+  parsing/ast_iterator.cmo \
   parsing/builtin_attributes.cmo \
   parsing/camlinternalMenhirLib.cmo \
   parsing/parser.cmo \
@@ -67,7 +70,6 @@ PARSING = \
   parsing/parse.cmo \
   parsing/printast.cmo \
   parsing/ast_mapper.cmo \
-  parsing/ast_iterator.cmo \
   parsing/attr_helper.cmo \
   parsing/ast_invariants.cmo \
   parsing/depend.cmo
@@ -103,6 +105,7 @@ TYPING = \
   typing/tast_mapper.cmo \
   typing/stypes.cmo \
   file_formats/cmt_format.cmo \
+  file_formats/cms_format.cmo \
   typing/cmt2annot.cmo \
   typing/untypeast.cmo \
   typing/includemod.cmo \
@@ -113,8 +116,6 @@ TYPING = \
   typing/parmatch.cmo \
   typing/typedecl_properties.cmo \
   typing/typedecl_variance.cmo \
-  typing/typedecl_unboxed.cmo \
-  typing/typedecl_immediacy.cmo \
   typing/typedecl_separability.cmo \
   lambda/debuginfo.cmo lambda/lambda.cmo \
   typing/typedecl.cmo \
@@ -131,10 +132,13 @@ LAMBDA = \
   lambda/printlambda.cmo \
   lambda/switch.cmo \
   lambda/matching.cmo \
+  lambda/translmode.cmo \
+  lambda/transl_comprehension_utils.cmo \
+  lambda/transl_array_comprehension.cmo \
+  lambda/transl_list_comprehension.cmo \
   lambda/translobj.cmo \
   lambda/translattribute.cmo \
   lambda/translprim.cmo \
-  lambda/translcomprehension.cmo \
   lambda/translcore.cmo \
   lambda/translclass.cmo \
   lambda/translmod.cmo \
@@ -338,7 +342,6 @@ MIDDLE_END = \
   middle_end/flambda/inlining_cost.cmo \
   middle_end/flambda/simple_value_approx.cmo \
   middle_end/flambda/export_info.cmo \
-  middle_end/flambda/export_info_for_pack.cmo \
   middle_end/compilenv.cmo \
   $(MIDDLE_END_CLOSURE) \
   $(MIDDLE_END_FLAMBDA)

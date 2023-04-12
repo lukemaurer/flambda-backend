@@ -489,11 +489,6 @@ val print_if :
 
 type filepath = string
 
-(* CR-someday lmaurer: Retire [modname] in favor of [Compilation_unit.Name.t]
-   and alter [crcs] accordingly (move it into [Compilation_unit] somewhere?). *)
-type modname = string
-type crcs = (modname * Digest.t option) list
-
 type alerts = string Stdlib.String.Map.t
 
 module Bitmap : sig
@@ -578,7 +573,7 @@ module Magic_number : sig
     | Cmi | Cmo | Cma
     | Cmx of native_obj_config | Cmxa of native_obj_config
     | Cmxs
-    | Cmt | Ast_impl | Ast_intf
+    | Cmt | Cms | Ast_impl | Ast_intf
 
   type info = {
     kind: kind;

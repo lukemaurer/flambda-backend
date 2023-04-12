@@ -15,7 +15,7 @@
 
 (* Second intermediate language (machine independent) *)
 
-type machtype_component =
+type machtype_component = Cmx_format.machtype_component =
   | Val
   | Addr
   | Int
@@ -98,11 +98,15 @@ val cur_label: unit -> label
 
 type exit_label =
   | Return_lbl
-  | Lbl of label
+  | Lbl of Lambda.static_label
 
 type rec_flag = Nonrecursive | Recursive
 
 type prefetch_temporal_locality_hint = Nonlocal | Low | Moderate | High
+
+type atomic_op = Fetch_and_add | Compare_and_swap
+
+type atomic_bitwidth = Thirtytwo | Sixtyfour | Word
 
 type effects = No_effects | Arbitrary_effects
 type coeffects = No_coeffects | Has_coeffects
@@ -134,7 +138,7 @@ type phantom_defining_expr =
   (** The phantom-let-bound variable points at a block with the given
       structure. *)
 
-type trywith_shared_label = int (* Same as Ccatch handlers *)
+type trywith_shared_label = Lambda.static_label (* Same as Ccatch handlers *)
 
 type trap_action =
   | Push of trywith_shared_label
@@ -196,6 +200,7 @@ and operation =
   | Cctz of { arg_is_non_zero: bool; }
   | Cpopcnt
   | Cprefetch of { is_write: bool; locality: prefetch_temporal_locality_hint; }
+  | Catomic of { op: atomic_op; size : atomic_bitwidth }
   | Ccmpi of integer_comparison
   | Caddv (* pointer addition that produces a [Val] (well-formed Caml value) *)
   | Cadda (* pointer addition that produces a [Addr] (derived heap pointer) *)
@@ -245,13 +250,15 @@ type expression =
       * Debuginfo.t * value_kind
   | Ccatch of
       rec_flag
-        * (label * (Backend_var.With_provenance.t * machtype) list
+        * (Lambda.static_label * (Backend_var.With_provenance.t * machtype) list
           * expression * Debuginfo.t) list
         * expression
         * value_kind
   | Cexit of exit_label * expression list * trap_action list
   | Ctrywith of expression * trywith_kind * Backend_var.With_provenance.t
       * expression * Debuginfo.t * value_kind
+  (** Only if the [trywith_kind] is [Regular] will a region be inserted for
+      the "try" block. *)
   | Cregion of expression
   | Ctail of expression
 

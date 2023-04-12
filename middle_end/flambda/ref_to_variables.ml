@@ -147,7 +147,7 @@ let eliminate_ref_of_expr flam =
                 (Let_mutable { var = field_var;
                                initial_value = init;
                                body;
-                               contents_kind = kind } : Flambda.t))
+                               contents_kind = Lambda.Pvalue kind } : Flambda.t))
             (0,body) l shape in
         expr
       | Let _ | Let_mutable _
@@ -159,7 +159,7 @@ let eliminate_ref_of_expr flam =
         flam
     and aux_named (named : Flambda.named) : Flambda.named =
       match named with
-      | Prim(Pfield field, [v], _)
+      | Prim(Pfield (field, _), [v], _)
         when convertible_variable v ->
         (match get_variable v field with
          | None -> Expr Proved_unreachable

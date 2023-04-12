@@ -60,13 +60,24 @@ val boxedint64_header : nativeint
 val boxedintnat_header : nativeint
 
 (** Closure info for a closure of given arity and distance to environment *)
-val closure_info : arity:Clambda.arity -> startenv:int -> nativeint
+val closure_info :
+  arity:Clambda.arity -> startenv:int -> is_last:bool -> nativeint
+
+val closure_info' :
+  arity:Lambda.function_kind * 'a list ->
+  startenv:int ->
+  is_last:bool ->
+  nativeint
 
 (** Wrappers *)
 val alloc_infix_header : int -> Debuginfo.t -> expression
 
 val alloc_closure_info :
-  arity:Lambda.function_kind * int -> startenv:int -> Debuginfo.t -> expression
+  arity:Clambda.arity ->
+  startenv:int ->
+  is_last:bool ->
+  Debuginfo.t ->
+  expression
 
 (** Integers *)
 
@@ -108,6 +119,8 @@ val ignore_high_bit_int : expression -> expression
 val add_int : expression -> expression -> Debuginfo.t -> expression
 
 val sub_int : expression -> expression -> Debuginfo.t -> expression
+
+val neg_int : expression -> Debuginfo.t -> expression
 
 val lsl_int : expression -> expression -> Debuginfo.t -> expression
 
@@ -217,9 +230,19 @@ val remove_unit : expression -> expression
 val field_address : expression -> int -> Debuginfo.t -> expression
 
 (** [get_field_gen mut ptr n dbg] returns an expression for the access to the
-    [n]th field of the block pointed to by [ptr] *)
+    [n]th field of the block pointed to by [ptr].  The [memory_chunk] used is
+    always [Word_val]. *)
 val get_field_gen :
   Asttypes.mutable_flag -> expression -> int -> Debuginfo.t -> expression
+
+(** Like [get_field_gen] but allows use of a different [memory_chunk]. *)
+val get_field_gen_given_memory_chunk :
+  Cmm.memory_chunk ->
+  Asttypes.mutable_flag ->
+  expression ->
+  int ->
+  Debuginfo.t ->
+  expression
 
 (** Get the field of the given [block] whose index is specified by the Cmm
     expresson [index] (in words). *)
@@ -328,6 +351,50 @@ val string_length : expression -> Debuginfo.t -> expression
 
 val bigstring_length : expression -> Debuginfo.t -> expression
 
+module Extended_machtype_component : sig
+  (** Like [Cmm.machtype_component] but has a case explicitly for tagged
+      integers.  This enables caml_apply functions to be insensitive to whether
+      a particular argument or return value is a tagged integer or a normal
+      value.  In turn this significantly reduces the number of caml_apply
+      functions that are generated. *)
+  type t =
+    | Val
+    | Addr
+    | Tagged_int
+    | Any_int
+    | Float
+end
+
+module Extended_machtype : sig
+  type t = Extended_machtype_component.t array
+
+  val typ_val : t
+
+  val typ_tagged_int : t
+
+  val typ_any_int : t
+
+  val typ_int64 : t
+
+  val typ_float : t
+
+  val typ_void : t
+
+  (** Conversion from a normal Cmm machtype. *)
+  val of_machtype : machtype -> t
+
+  (** Conversion from a Lambda layout. *)
+  val of_layout : Lambda.layout -> t
+
+  (** Conversion to a normal Cmm machtype. *)
+  val to_machtype : t -> machtype
+
+  (** Like [to_machtype] but tagged integer extended machtypes are mapped to
+      value machtypes.  This is used to avoid excessive numbers of generic
+      functions being generated (see comments in cmm_helpers.ml). *)
+  val change_tagged_int_to_val : t -> machtype
+end
+
 (** Objects *)
 
 (** Lookup a method by its hash, using [caml_get_public_method]. Arguments:
@@ -362,6 +429,8 @@ val call_cached_method :
   expression ->
   expression ->
   expression list ->
+  Extended_machtype.t list ->
+  Extended_machtype.t ->
   Clambda.apply_kind ->
   Debuginfo.t ->
   expression
@@ -399,13 +468,14 @@ val opaque : expression -> Debuginfo.t -> expression
 
 (** Generic application functions *)
 
-(** Get the symbol for the generic application with [n] arguments, and ensure
-    its presence in the set of defined symbols *)
-val apply_function_sym : int -> Lambda.alloc_mode -> string
+(** Get an identifier for a given machtype, used in the name of the
+    generic functions. *)
+val machtype_identifier : machtype -> string
 
 (** Get the symbol for the generic currying or tuplifying wrapper with [n]
     arguments, and ensure its presence in the set of defined symbols. *)
-val curry_function_sym : Clambda.arity -> string
+val curry_function_sym :
+  Lambda.function_kind -> machtype list -> machtype -> string
 
 (** Bigarrays *)
 
@@ -737,7 +807,12 @@ val ptr_offset : expression -> int -> Debuginfo.t -> expression
 
 (** Direct application of a function via a symbol *)
 val direct_apply :
-  string -> expression list -> Clambda.apply_kind -> Debuginfo.t -> expression
+  string ->
+  machtype ->
+  expression list ->
+  Clambda.apply_kind ->
+  Debuginfo.t ->
+  expression
 
 (** Generic application of a function to one or several arguments. The
     mutable_flag argument annotates the loading of the code pointer from the
@@ -748,6 +823,8 @@ val generic_apply :
   Asttypes.mutable_flag ->
   expression ->
   expression list ->
+  Extended_machtype.t list ->
+  Extended_machtype.t ->
   Clambda.apply_kind ->
   Debuginfo.t ->
   expression
@@ -767,24 +844,14 @@ val send :
   expression ->
   expression ->
   expression list ->
+  Extended_machtype.t list ->
+  Extended_machtype.t ->
   Clambda.apply_kind ->
   Debuginfo.t ->
   expression
 
 (** Construct [Cregion e], eliding some useless regions *)
 val region : expression -> expression
-
-(** [cextcall prim args dbg type_of_result] returns Cextcall operation that
-    corresponds to [prim]. If [prim] is a C builtin supported on the target,
-    returns [Cmm.operation] variant for [prim]'s intrinsics. *)
-val cextcall :
-  Primitive.description ->
-  expression list ->
-  Debuginfo.t ->
-  machtype ->
-  exttype list ->
-  bool ->
-  expression
 
 (** Generic Cmm fragments *)
 
@@ -820,8 +887,7 @@ val reference_symbols : string list -> phrase
     The runtime representation of the type here must match that of [type
     global_map] in the natdynlink code. *)
 val globals_map :
-  (Compilation_unit.Name.t * Digest.t option * Digest.t option * Symbol.t list)
-  list ->
+  (Compilation_unit.t * Digest.t option * Digest.t option * Symbol.t list) list ->
   phrase
 
 (** Generate the caml_frametable table, referencing the frametables from the
@@ -977,14 +1043,18 @@ type static_handler
     binding variables [vars] in [body]. *)
 val handler :
   dbg:Debuginfo.t ->
-  int ->
+  Lambda.static_label ->
   (Backend_var.With_provenance.t * Cmm.machtype) list ->
   Cmm.expression ->
   static_handler
 
 (** [cexit id args] creates the cmm expression for static to a static handler
     with exit number [id], with arguments [args]. *)
-val cexit : int -> Cmm.expression list -> Cmm.trap_action list -> Cmm.expression
+val cexit :
+  Lambda.static_label ->
+  Cmm.expression list ->
+  Cmm.trap_action list ->
+  Cmm.expression
 
 (** [trap_return res traps] creates the cmm expression for returning [res] after
     applying the trap actions in [traps]. *)
@@ -1109,10 +1179,11 @@ val direct_call :
 (** Same as {!direct_call} but for an indirect call. *)
 val indirect_call :
   dbg:Debuginfo.t ->
-  machtype ->
+  Extended_machtype.t ->
   Lambda.region_close ->
   Lambda.alloc_mode ->
   expression ->
+  Extended_machtype.t list ->
   expression list ->
   expression
 
@@ -1120,22 +1191,11 @@ val indirect_call :
     application (since this enables a few optimisations). *)
 val indirect_full_call :
   dbg:Debuginfo.t ->
-  machtype ->
+  Extended_machtype.t ->
   Lambda.region_close ->
   Lambda.alloc_mode ->
   expression ->
-  expression list ->
-  expression
-
-(** Create a C function call. *)
-val extcall :
-  dbg:Debuginfo.t ->
-  returns:bool ->
-  alloc:bool ->
-  is_c_builtin:bool ->
-  ty_args:exttype list ->
-  string ->
-  machtype ->
+  Extended_machtype.t list ->
   expression list ->
   expression
 
@@ -1213,3 +1273,9 @@ val transl_attrib : Lambda.check_attribute -> Cmm.codegen_option list
 
 (* CR lmaurer: Return [Linkage_name.t] instead *)
 val make_symbol : ?compilation_unit:Compilation_unit.t -> string -> string
+
+val kind_of_layout : Lambda.layout -> value_kind
+
+val machtype_of_layout : Lambda.layout -> machtype
+
+val machtype_of_layout_changing_tagged_int_to_val : Lambda.layout -> machtype

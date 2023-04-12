@@ -47,6 +47,7 @@ module TransientTypeHash = Hashtbl.Make(TransientTypeOps)
 module TypeHash = struct
   include TransientTypeHash
   let add hash = wrap_repr (add hash)
+  let remove hash = wrap_repr (remove hash)
   let find hash = wrap_repr (find hash)
   let iter f = TransientTypeHash.iter (wrap_type_expr f)
 end
@@ -124,6 +125,7 @@ let newmarkedgenvar () =
 let is_Tvar ty = match get_desc ty with Tvar _ -> true | _ -> false
 let is_Tunivar ty = match get_desc ty with Tunivar _ -> true | _ -> false
 let is_Tconstr ty = match get_desc ty with Tconstr _ -> true | _ -> false
+let is_Tpoly ty = match get_desc ty with Tpoly _ -> true | _ -> false
 
 let dummy_method = "*dummy method*"
 
@@ -313,16 +315,16 @@ type type_iterators =
     it_path: Path.t -> unit; }
 
 let iter_type_expr_cstr_args f = function
-  | Cstr_tuple tl -> List.iter f tl
+  | Cstr_tuple tl -> List.iter (fun (ty, _) -> f ty) tl
   | Cstr_record lbls -> List.iter (fun d -> f d.ld_type) lbls
 
 let map_type_expr_cstr_args f = function
-  | Cstr_tuple tl -> Cstr_tuple (List.map f tl)
+  | Cstr_tuple tl -> Cstr_tuple (List.map (fun (ty, gf) -> (f ty, gf)) tl)
   | Cstr_record lbls ->
       Cstr_record (List.map (fun d -> {d with ld_type=f d.ld_type}) lbls)
 
 let iter_type_expr_kind f = function
-  | Type_abstract -> ()
+  | Type_abstract _ -> ()
   | Type_variant (cstrs, _) ->
       List.iter
         (fun cd ->
@@ -601,6 +603,7 @@ let rec signature_of_class_type =
   | Cty_signature sign     -> sign
   | Cty_arrow (_, _, cty)   -> signature_of_class_type cty
 
+
 let rec class_body cty =
   match cty with
     Cty_constr _ ->
@@ -701,6 +704,26 @@ let instance_variable_type label sign =
   match Vars.find label sign.csig_vars with
   | (_, _, ty) -> ty
   | exception Not_found -> assert false
+
+                  (********************************)
+                  (*  Utilities for poly types    *)
+                  (********************************)
+
+let tpoly_is_mono ty =
+  match get_desc ty with
+  | Tpoly(_, []) -> true
+  | Tpoly(_, _ :: _) -> false
+  | _ -> assert false
+
+let tpoly_get_poly ty =
+  match get_desc ty with
+  | Tpoly(ty, vars) -> (ty, vars)
+  | _ -> assert false
+
+let tpoly_get_mono ty =
+  match get_desc ty with
+  | Tpoly(ty, []) -> ty
+  | _ -> assert false
 
                   (**********************************)
                   (*  Utilities for level-marking   *)

@@ -77,16 +77,18 @@ COMPILERLIBS_SOURCES=\
   utils/identifiable.ml \
   utils/numbers.ml \
   utils/arg_helper.ml \
+  utils/local_store.ml \
+  utils/load_path.ml \
   utils/clflags.ml \
+  utils/language_extension.ml \
   utils/profile.ml \
   utils/consistbl.ml \
   utils/terminfo.ml \
   utils/warnings.ml \
-  utils/local_store.ml \
-  utils/load_path.ml \
   utils/int_replace_polymorphic_compare.ml \
   typing/ident.ml \
   utils/compilation_unit.ml \
+  utils/import_info.ml \
   utils/linkage_name.ml \
   utils/symbol.ml \
   utils/lazy_backtrack.ml \
@@ -95,6 +97,9 @@ COMPILERLIBS_SOURCES=\
   parsing/docstrings.ml \
   parsing/syntaxerr.ml \
   parsing/ast_helper.ml \
+  parsing/extensions_parsing.ml \
+  parsing/extensions.ml \
+  parsing/ast_iterator.ml \
   parsing/builtin_attributes.ml \
   parsing/ast_mapper.ml \
   parsing/attr_helper.ml \
@@ -193,19 +198,21 @@ $(LOCAL_SRC)/%.cmx: $(LOCAL_SRC)/%.ml
 
 # Rules for building the [Dynlink_compilerlibs] bytecode and native packs
 # from their components.
-
+# The dynlink_compilerlibs.cmi file is unfortunately written by both the ocamlc
+# and ocamlopt invocations.  The resulting files are different, probably because
+# of sharing differences.  Writing an .mli file would be problematic.  Instead
+# we allow the compiler to generate the inferred .cmi upon the ocamlc
+# invocation, then trick it (by touching dynlink_compilerlibs.mli) upon the
+# ocamlopt invocation, which causes it to use the ocamlc-generated .cmi.
 dynlink_compilerlibs.cmi: $(COMPILERLIBS_CMO)
+	rm -f dynlink_compilerlibs.mli
 	$(OCAMLC) $(COMPFLAGS) -pack -o dynlink_compilerlibs.cmo $(COMPILERLIBS_CMO)
 
 dynlink_compilerlibs.cmo: dynlink_compilerlibs.cmi
 
-dynlink_compilerlibs.cmx: $(COMPILERLIBS_CMX)
+dynlink_compilerlibs.cmx: $(COMPILERLIBS_CMX) dynlink_compilerlibs.cmi
+	touch dynlink_compilerlibs.mli
 	$(OCAMLOPT) $(COMPFLAGS) $(OPTCOMPFLAGS) -pack -o $@ $(COMPILERLIBS_CMX)
-
-# Rules for building the interface of the [Dynlink_compilerlibs] packs.
-# To avoid falling foul of the problem described below, the .cmo and .cmx
-# files for the dynlink-specific compilerlibs packs generated here---and in
-# particular the corresponding .cmi files -- are kept in separate directories.
 
 # The main dynlink rules start here.
 
@@ -233,21 +240,29 @@ $(eval $(call PROGRAM_SYNONYM,extract_crc))
 $(extract_crc): dynlink.cma dynlink_compilerlibs.cmo extract_crc.cmo
 	$(OCAMLC) -o $@ $^
 
+INSTALL_LIBDIR_DYNLINK = $(INSTALL_LIBDIR)/dynlink
+
 install:
+# If installing over a previous OCaml version, ensure dynlink is removed from
+# the previous installation.
+	rm -f "$(INSTALL_LIBDIR)"/dynlink.cm* "$(INSTALL_LIBDIR)/dynlink.mli" \
+        "$(INSTALL_LIBDIR)/dynlink.$(A)" \
+        $(addprefix "$(INSTALL_LIBDIR)/", $(notdir $(NATOBJS)))
+	$(MKDIR) "$(INSTALL_LIBDIR_DYNLINK)"
 	$(INSTALL_DATA) \
 	  dynlink.cmi dynlink.cma \
-	  "$(INSTALL_LIBDIR)"
+	  "$(INSTALL_LIBDIR_DYNLINK)"
 ifeq "$(INSTALL_SOURCE_ARTIFACTS)" "true"
 	$(INSTALL_DATA) \
 	  dynlink.cmti dynlink.mli \
-	  "$(INSTALL_LIBDIR)"
+	  "$(INSTALL_LIBDIR_DYNLINK)"
 endif
 
 installopt:
 ifeq "$(strip $(NATDYNLINK))" "true"
 	$(INSTALL_DATA) \
 	  $(NATOBJS) dynlink.cmxa dynlink.$(A) \
-	  "$(INSTALL_LIBDIR)"
+	  "$(INSTALL_LIBDIR_DYNLINK)"
 endif
 
 partialclean:

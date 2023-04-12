@@ -244,35 +244,87 @@ let newobj fields      = newty (Tobject (fields, ref None))
 
 let newconstr path tyl = newty (Tconstr (path, tyl, ref Mnil))
 
+let newmono ty = newty (Tpoly(ty, []))
+
 let none = newty (Ttuple [])                (* Clearly ill-formed type *)
 
 (**** unification mode ****)
-
-type unification_mode =
-  | Expression (* unification in expression *)
-  | Pattern (* unification in pattern which may add local constraints *)
 
 type equations_generation =
   | Forbidden
   | Allowed of { equated_types : TypePairs.t }
 
+type unification_mode =
+  | Expression (* unification in expression *)
+  | Pattern of
+      { equations_generation : equations_generation;
+        assume_injective : bool;
+        allow_recursive_equations : bool; }
+    (* unification in pattern which may add local constraints *)
+  | Subst
+    (* unification during type constructor expansion; more
+       relaxed than [Expression] in some cases. *)
+
 let umode = ref Expression
-let equations_generation = ref Forbidden
-let assume_injective = ref false
-let allow_recursive_equation = ref false
+
+let in_pattern_mode () =
+  match !umode with
+  | Expression | Subst -> false
+  | Pattern _ -> true
+
+let in_subst_mode () =
+  match !umode with
+  | Expression | Pattern _ -> false
+  | Subst -> true
 
 let can_generate_equations () =
-  match !equations_generation with
-  | Forbidden -> false
-  | _ -> true
+  match !umode with
+  | Expression | Subst | Pattern { equations_generation = Forbidden } -> false
+  | Pattern { equations_generation = Allowed _ } -> true
 
-let set_mode_pattern ~generate ~injective ~allow_recursive f =
-  Misc.protect_refs
-    [ Misc.R (umode, Pattern);
-      Misc.R (equations_generation, generate);
-      Misc.R (assume_injective, injective);
-      Misc.R (allow_recursive_equation, allow_recursive);
-    ] f
+(* Can only be called when generate_equations is true *)
+let record_equation t1 t2 =
+  match !umode with
+  | Expression | Subst | Pattern { equations_generation = Forbidden } ->
+      assert false
+  | Pattern { equations_generation = Allowed { equated_types } } ->
+      TypePairs.add equated_types (t1, t2)
+
+let can_assume_injective () =
+  match !umode with
+  | Expression | Subst -> false
+  | Pattern { assume_injective } -> assume_injective
+
+let allow_recursive_equations () =
+  !Clflags.recursive_types
+  || match !umode with
+     | Expression | Subst -> false
+     | Pattern { allow_recursive_equations } -> allow_recursive_equations
+
+let set_mode_pattern ~allow_recursive_equations ~equated_types f =
+  let equations_generation = Allowed { equated_types } in
+  let assume_injective = true in
+  let new_umode =
+    Pattern
+      { equations_generation;
+        assume_injective;
+        allow_recursive_equations }
+  in
+  Misc.protect_refs [ Misc.R (umode, new_umode) ] f
+
+let without_assume_injective f =
+  match !umode with
+  | Expression | Subst -> f ()
+  | Pattern r ->
+      let new_umode = Pattern { r with assume_injective = false } in
+      Misc.protect_refs [ Misc.R (umode, new_umode) ] f
+
+let without_generating_equations f =
+  match !umode with
+  | Expression | Subst -> f ()
+  | Pattern r ->
+    let new_umode = Pattern { r with equations_generation = Forbidden } in
+    Misc.protect_refs [ Misc.R (umode, new_umode) ] f
 
 (*** Checks for type definitions ***)
 
@@ -288,7 +340,7 @@ let in_pervasives p =
 let is_datatype decl=
   match decl.type_kind with
     Type_record _ | Type_variant _ | Type_open -> true
-  | Type_abstract -> false
+  | Type_abstract _ -> false
 
 
                   (**********************************************)
@@ -520,7 +572,7 @@ let closed_type_decl decl =
   try
     List.iter mark_type decl.type_params;
     begin match decl.type_kind with
-      Type_abstract ->
+      Type_abstract _ ->
         ()
     | Type_variant (v, _rep) ->
         List.iter
@@ -529,7 +581,7 @@ let closed_type_decl decl =
             | Some _ -> ()
             | None ->
                 match cd_args with
-                | Cstr_tuple l ->  List.iter closed_type l
+                | Cstr_tuple l ->  List.iter (fun (ty, _) -> closed_type ty) l
                 | Cstr_record l -> List.iter (fun l -> closed_type l.ld_type) l
           )
           v
@@ -842,7 +894,7 @@ let rec lower_contravariant env var_level visited contra ty =
          try
            let typ = Env.find_type path env in
            typ.type_variance,
-           typ.type_kind = Type_abstract
+           decl_is_abstract typ
           with Not_found ->
             (* See testsuite/tests/typing-missing-cmi-2 for an example *)
             List.map (fun _ -> Variance.unknown) tyl,
@@ -1048,7 +1100,7 @@ let rec copy ?partial ?keep_names scope ty =
       match partial with
         None -> assert false
       | Some (free_univars, keep) ->
-          if TypeSet.is_empty (free_univars ty) then
+          if not (is_Tpoly ty) && TypeSet.is_empty (free_univars ty) then
             if keep then level else !current_level
           else generic_level
     in
@@ -1192,7 +1244,7 @@ let new_local_type ?(loc = Location.none) ?manifest_and_scope () =
   {
     type_params = [];
     type_arity = 0;
-    type_kind = Type_abstract;
+    type_kind = Types.kind_abstract;
     type_private = Public;
     type_manifest = manifest;
     type_variance = [];
@@ -1201,7 +1253,6 @@ let new_local_type ?(loc = Location.none) ?manifest_and_scope () =
     type_expansion_scope = expansion_scope;
     type_loc = loc;
     type_attributes = [];
-    type_immediate = Unknown;
     type_unboxed_default = false;
     type_uid = Uid.mk ~current_unit:(Env.get_unit_name ());
   }
@@ -1231,7 +1282,7 @@ let instance_constructor ?in_pattern cstr =
         List.iter process cstr.cstr_existentials
     end;
     let ty_res = copy scope cstr.cstr_res in
-    let ty_args = List.map (copy scope) cstr.cstr_args in
+    let ty_args = List.map (fun (ty, gf) -> copy scope ty, gf) cstr.cstr_args in
     let ty_ex = List.map (copy scope) cstr.cstr_existentials in
     (ty_args, ty_res, ty_ex)
   )
@@ -1252,8 +1303,7 @@ let instance_parameterized_type_2 sch_args sch_lst sch =
   )
 
 let map_kind f = function
-  | Type_abstract -> Type_abstract
-  | Type_open -> Type_open
+  | (Type_abstract _ | Type_open) as k -> k
   | Type_variant (cl, rep) ->
       Type_variant (
         List.map
@@ -1484,13 +1534,17 @@ let subst env level priv abbrev oty params args body =
   abbreviations := abbrev;
   let (params', body') = instance_parameterized_type params body in
   abbreviations := ref Mnil;
+  let old_umode = !umode in
+  umode := Subst;
   try
     !unify_var' env body0 body';
     List.iter2 (!unify_var' env) params' args;
     current_level := old_level;
+    umode := old_umode;
     body'
   with Unify _ ->
     current_level := old_level;
+    umode := old_umode;
     undo_abbrev ();
     raise Cannot_subst
 
@@ -1677,7 +1731,7 @@ let rec extract_concrete_typedecl env ty =
       begin match Env.find_type p env with
       | exception Not_found -> May_have_typedecl
       | decl ->
-          if decl.type_kind <> Type_abstract then Typedecl(p, p, decl)
+          if not (decl_is_abstract decl) then Typedecl(p, p, decl)
           else begin
             match try_expand_safe env ty with
             | exception Cannot_expand -> May_have_typedecl
@@ -1769,7 +1823,7 @@ let generic_abbrev env path =
 let generic_private_abbrev env path =
   try
     match Env.find_type path env with
-      {type_kind = Type_abstract;
+      {type_kind = Type_abstract _;
        type_private = Private;
        type_manifest = Some body} ->
          get_level body = generic_level
@@ -1820,8 +1874,7 @@ let type_changed = ref false (* trace possible changes to the studied type *)
 let merge r b = if b then r := true
 
 let occur env ty0 ty =
-  let allow_recursive =
-    !Clflags.recursive_types || !umode = Pattern && !allow_recursive_equation in
+  let allow_recursive = allow_recursive_equations () in
   let old = !type_changed in
   try
     while
@@ -1881,8 +1934,7 @@ let rec local_non_recursive_abbrev ~allow_rec strict visited env p ty =
   end
 
 let local_non_recursive_abbrev env p ty =
-  let allow_rec =
-    !Clflags.recursive_types || !umode = Pattern && !allow_recursive_equation in
+  let allow_rec = allow_recursive_equations () in
   try (* PR#7397: need to check trace_gadt_instances *)
     wrap_trace_gadt_instances env
       (local_non_recursive_abbrev ~allow_rec false [] env p) ty;
@@ -2216,7 +2268,7 @@ let is_newtype env p =
   try
     let decl = Env.find_type p env in
     decl.type_expansion_scope <> Btype.lowest_level &&
-    decl.type_kind = Type_abstract &&
+    decl_is_abstract decl &&
     decl.type_private = Public
   with Not_found -> false
 
@@ -2227,7 +2279,7 @@ let non_aliasable p decl =
 let is_instantiable env p =
   try
     let decl = Env.find_type p env in
-    decl.type_kind = Type_abstract &&
+    decl_is_abstract decl &&
     decl.type_private = Public &&
     decl.type_arity = 0 &&
     decl.type_manifest = None &&
@@ -2411,9 +2463,9 @@ and mcomp_type_decl type_pairs env p1 p2 tl1 tl2 =
           mcomp_variant_description type_pairs env v1 v2
       | Type_open, Type_open ->
           mcomp_list type_pairs env tl1 tl2
-      | Type_abstract, Type_abstract -> ()
-      | Type_abstract, _ when not (non_aliasable p1 decl)-> ()
-      | _, Type_abstract when not (non_aliasable p2 decl') -> ()
+      | Type_abstract _, Type_abstract _ -> ()
+      | Type_abstract _, _ when not (non_aliasable p1 decl)-> ()
+      | _, Type_abstract _ when not (non_aliasable p2 decl') -> ()
       | _ -> raise Incompatible
   with Not_found -> ()
 
@@ -2429,7 +2481,7 @@ and mcomp_variant_description type_pairs env xs ys =
     | c1 :: xs, c2 :: ys   ->
       mcomp_type_option type_pairs env c1.cd_res c2.cd_res;
       begin match c1.cd_args, c2.cd_args with
-      | Cstr_tuple l1, Cstr_tuple l2 -> mcomp_list type_pairs env l1 l2
+      | Cstr_tuple l1, Cstr_tuple l2 -> mcomp_tuple_description type_pairs env l1 l2
       | Cstr_record l1, Cstr_record l2 ->
           mcomp_record_description type_pairs env l1 l2
       | _ -> raise Incompatible
@@ -2441,6 +2493,19 @@ and mcomp_variant_description type_pairs env xs ys =
     | _ -> raise Incompatible
   in
   iter xs ys
+
+and mcomp_tuple_description type_pairs env =
+  let rec iter x y =
+    match x, y with
+    | (ty1, gf1) :: xs, (ty2, gf2) :: ys ->
+      mcomp type_pairs env ty1 ty2;
+      if gf1 = gf2
+      then iter xs ys
+      else raise Incompatible
+    | [], [] -> ()
+    | _ -> raise Incompatible
+  in
+  iter
 
 and mcomp_record_description type_pairs env =
   let rec iter x y =
@@ -2553,7 +2618,7 @@ let complete_type_list ?(allow_absent=false) env fl1 lv2 mty2 fl2 =
     | (n, _) :: nl, _ ->
         let lid = concat_longident (Longident.Lident "Pkg") n in
         match Env.find_type_by_name lid env' with
-        | (_, {type_arity = 0; type_kind = Type_abstract;
+        | (_, {type_arity = 0; type_kind = Type_abstract _;
                type_private = Public; type_manifest = Some t2}) ->
             begin match nondep_instance env' lv2 id2 t2 with
             | t -> (n, t) :: complete nl fl2
@@ -2563,7 +2628,7 @@ let complete_type_list ?(allow_absent=false) env fl1 lv2 mty2 fl2 =
                 else
                   raise Exit
             end
-        | (_, {type_arity = 0; type_kind = Type_abstract;
+        | (_, {type_arity = 0; type_kind = Type_abstract _;
                type_private = Public; type_manifest = None})
           when allow_absent ->
             complete nl fl2
@@ -2593,11 +2658,9 @@ let unify_alloc_mode_for tr_exn a b =
 let rigid_variants = ref false
 
 let unify_eq t1 t2 =
-  eq_type t1 t2 ||
-  match !umode with
-  | Expression -> false
-  | Pattern ->
-      TypePairs.mem unify_eq_set (order_type_pair t1 t2)
+  eq_type t1 t2
+  || (in_pattern_mode ()
+      && TypePairs.mem unify_eq_set (order_type_pair t1 t2))
 
 let unify1_var env t1 t2 =
   assert (is_Tvar t1);
@@ -2613,22 +2676,15 @@ let unify1_var env t1 t2 =
       end;
       link_type t1 t2;
       true
-  | exception Unify_trace _ when !umode = Pattern ->
+  | exception Unify_trace _ when in_pattern_mode () ->
       false
-
-(* Can only be called when generate_equations is true *)
-let record_equation t1 t2 =
-  match !equations_generation with
-  | Forbidden -> assert false
-  | Allowed { equated_types } ->
-      TypePairs.add equated_types (t1, t2)
 
 (* Called from unify3 *)
 let unify3_var env t1' t2 t2' =
   occur_for Unify !env t1' t2;
   match occur_univar_for Unify !env t2 with
   | () -> link_type t1' t2
-  | exception Unify_trace _ when !umode = Pattern ->
+  | exception Unify_trace _ when in_pattern_mode () ->
       reify env t1';
       reify env t2';
       if can_generate_equations () then begin
@@ -2760,12 +2816,11 @@ and unify3 env t1 t1' t2 t2' =
   | (Tfield _, Tfield _) -> (* special case for GADTs *)
       unify_fields env t1' t2'
   | _ ->
-    begin match !umode with
-    | Expression ->
-        occur_for Unify !env t1' t2;
-        link_type t1' t2
-    | Pattern ->
-        add_type_equality t1' t2'
+    if in_pattern_mode () then
+      add_type_equality t1' t2'
+    else begin
+      occur_for Unify !env t1' t2;
+      link_type t1' t2
     end;
     try
       begin match (d1, d2) with
@@ -2773,7 +2828,7 @@ and unify3 env t1 t1' t2 t2' =
          Tarrow ((l2,a2,r2), t2, u2, c2))
            when
              (l1 = l2 ||
-              (!Clflags.classic || !umode = Pattern) &&
+              (!Clflags.classic || in_pattern_mode ()) &&
                not (is_optional l1 || is_optional l2)) ->
           unify_alloc_mode_for Unify a1 a2;
           unify_alloc_mode_for Unify r1 r2;
@@ -2787,12 +2842,10 @@ and unify3 env t1 t1' t2 t2' =
       | (Ttuple tl1, Ttuple tl2) ->
           unify_list env tl1 tl2
       | (Tconstr (p1, tl1, _), Tconstr (p2, tl2, _)) when Path.same p1 p2 ->
-          if !umode = Expression || !equations_generation = Forbidden then
+          if not (can_generate_equations ()) then
             unify_list env tl1 tl2
-          else if !assume_injective then
-            set_mode_pattern ~generate:!equations_generation ~injective:false
-              ~allow_recursive:!allow_recursive_equation
-              (fun () -> unify_list env tl1 tl2)
+          else if can_assume_injective () then
+            without_assume_injective (fun () -> unify_list env tl1 tl2)
           else if in_current_module p1 (* || in_pervasives p1 *)
                || List.exists (expands_to_datatype !env) [t1'; t1; t2]
           then
@@ -2806,8 +2859,7 @@ and unify3 env t1 t1' t2 t2' =
             List.iter2
               (fun i (t1, t2) ->
                 if i then unify env t1 t2 else
-                set_mode_pattern ~generate:Forbidden ~injective:false
-                  ~allow_recursive:!allow_recursive_equation
+                without_generating_equations
                   begin fun () ->
                     let snap = snapshot () in
                     try unify env t1 t2 with Unify_trace _ ->
@@ -2837,7 +2889,7 @@ and unify3 env t1 t1' t2 t2' =
           reify env t1';
           record_equation t1' t2';
           add_gadt_equation env path t1'
-      | (Tconstr (_,_,_), _) | (_, Tconstr (_,_,_)) when !umode = Pattern ->
+      | (Tconstr (_,_,_), _) | (_, Tconstr (_,_,_)) when in_pattern_mode () ->
           reify env t1';
           reify env t2';
           if can_generate_equations () then (
@@ -2856,7 +2908,7 @@ and unify3 env t1 t1' t2 t2' =
           | _ -> ()
           end
       | (Tvariant row1, Tvariant row2) ->
-          if !umode = Expression then
+          if not (in_pattern_mode ()) then
             unify_row env row1 row2
           else begin
             let snap = snapshot () in
@@ -2895,7 +2947,7 @@ and unify3 env t1 t1' t2 t2' =
             unify_package !env (unify_list env)
               (get_level t1) p1 fl1 (get_level t2) p2 fl2
           with Not_found ->
-            if !umode = Expression then raise_unexplained_for Unify;
+            if not (in_pattern_mode ()) then raise_unexplained_for Unify;
             List.iter (fun (_n, ty) -> reify env ty) (fl1 @ fl2);
             (* if !generate_equations then List.iter2 (mcomp !env) tl1 tl2 *)
           end
@@ -2961,7 +3013,8 @@ and unify_fields env ty1 ty2 =          (* Optimization *)
       (fun (name, k1, t1, k2, t2) ->
         unify_kind k1 k2;
         try
-          if !trace_gadt_instances then begin
+          if !trace_gadt_instances && not (in_subst_mode ()) then begin
+            (* in_subst_mode: see PR#11771 *)
             update_level_for Unify !env (get_level va) t1;
             update_scope_for Unify (get_scope va) t1
           end;
@@ -3053,7 +3106,8 @@ and unify_row env row1 row2 =
     (* The following test is not principal... should rather use Tnil *)
     let rm = row_more row in
     (*if !trace_gadt_instances && rm.desc = Tnil then () else*)
-    if !trace_gadt_instances then
+    if !trace_gadt_instances && not (in_subst_mode ()) then
+      (* in_subst_mode: see PR#11771 *)
       update_level_for Unify !env (get_level rm) (newgenty (Tvariant row));
     if has_fixed_explanation row then
       if eq_type more rm then () else
@@ -3189,15 +3243,13 @@ let unify env ty1 ty2 =
       undo_compress snap;
       raise (Unify (expand_to_unification_error !env trace))
 
-let unify_gadt ~equations_level:lev ~allow_recursive (env:Env.t ref) ty1 ty2 =
+let unify_gadt ~equations_level:lev ~allow_recursive_equations
+      (env:Env.t ref) ty1 ty2 =
   try
     univar_pairs := [];
     gadt_equations_level := Some lev;
     let equated_types = TypePairs.create 0 in
-    set_mode_pattern
-      ~generate:(Allowed { equated_types })
-      ~injective:true
-      ~allow_recursive
+    set_mode_pattern ~allow_recursive_equations ~equated_types
       (fun () -> unify env ty1 ty2);
     gadt_equations_level := None;
     TypePairs.clear unify_eq_set;
@@ -3266,9 +3318,24 @@ type filter_arrow_failure =
 
 exception Filter_arrow_failed of filter_arrow_failure
 
-let filter_arrow env t l =
+let filter_arrow env t l ~force_tpoly =
   let function_type level =
-    let t1 = newvar2 level and t2 = newvar2 level in
+    let t1 =
+      if not force_tpoly then begin
+        assert (not (is_optional l));
+        newvar2 level
+      end else begin
+        let t1 =
+          if is_optional l then
+            newty2 ~level
+              (Tconstr(Predef.path_option,[newvar2 level], ref Mnil))
+          else
+            newvar2 level
+        in
+        newty2 ~level (Tpoly(t1, []))
+      end
+    in
+    let t2 = newvar2 level in
     let marg = Alloc_mode.newvar () in
     let mret = Alloc_mode.newvar () in
     let t' = newty2 ~level (Tarrow ((l,marg,mret), t1, t2, commu_ok)) in
@@ -3297,6 +3364,24 @@ let filter_arrow env t l =
                        { got = l; expected = l'; expected_type = t }))
   | _ ->
       raise (Filter_arrow_failed Not_a_function)
+
+exception Filter_mono_failed
+
+let filter_mono ty =
+  match get_desc ty with
+  | Tpoly(ty, []) -> ty
+  | Tpoly _ -> raise Filter_mono_failed
+  | _ -> assert false
+
+exception Filter_arrow_mono_failed
+
+let filter_arrow_mono env t l =
+  match filter_arrow env t l ~force_tpoly:true with
+  | exception Filter_arrow_failed _ -> raise Filter_arrow_mono_failed
+  | (marg, t1, mret, t2) ->
+      match filter_mono t1 with
+      | exception Filter_mono_failed -> raise Filter_arrow_mono_failed
+      | t1 -> (marg, t1, mret, t2)
 
 type filter_method_failure =
   | Unification_error of unification_error
@@ -5201,6 +5286,7 @@ let rec nongen_schema_rec env ty =
 
 (* Return whether all variables of type [ty] are generic. *)
 let nongen_schema env ty =
+  remove_mode_variables ty;
   visited := TypeSet.empty;
   try
     nongen_schema_rec env ty;
@@ -5332,7 +5418,7 @@ let rec nondep_type_rec ?(expand_private=false) env ids ty =
   with Not_found ->
     let ty' = newgenstub ~scope:(get_scope ty) in
     TypeHash.add nondep_hash ty ty';
-    let desc =
+    match
       match get_desc ty with
       | Tconstr(p, tl, _abbrev) as desc ->
           begin try
@@ -5393,9 +5479,13 @@ let rec nondep_type_rec ?(expand_private=false) env ids ty =
             | _ -> Tvariant row
           end
       | desc -> copy_type_desc (nondep_type_rec env ids) desc
-    in
-    Transient_expr.set_stub_desc ty' desc;
-    ty'
+    with
+    | desc ->
+      Transient_expr.set_stub_desc ty' desc;
+      ty'
+    | exception e ->
+      TypeHash.remove nondep_hash ty;
+      raise e
 
 let nondep_type env id ty =
   try
@@ -5414,7 +5504,7 @@ let nondep_type_decl env mid is_covariant decl =
     let params = List.map (nondep_type_rec env mid) decl.type_params in
     let tk =
       try map_kind (nondep_type_rec env mid) decl.type_kind
-      with Nondep_cannot_erase _ when is_covariant -> Type_abstract
+      with Nondep_cannot_erase _ when is_covariant -> Types.kind_abstract
     and tm, priv =
       match decl.type_manifest with
       | None -> None, decl.type_private
@@ -5444,7 +5534,6 @@ let nondep_type_decl env mid is_covariant decl =
       type_expansion_scope = Btype.lowest_level;
       type_loc = decl.type_loc;
       type_attributes = decl.type_attributes;
-      type_immediate = decl.type_immediate;
       type_unboxed_default = decl.type_unboxed_default;
       type_uid = decl.type_uid;
     }
@@ -5580,17 +5669,49 @@ let same_constr env t1 t2 =
 let () =
   Env.same_constr := same_constr
 
-let immediacy env typ =
-   match get_desc typ with
-  | Tconstr(p, _args, _abbrev) ->
-    begin try
-      let type_decl = Env.find_type p env in
-      type_decl.type_immediate
-    with Not_found -> Type_immediacy.Unknown
-    (* This can happen due to e.g. missing -I options,
-       causing some .cmi files to be unavailable.
-       Maybe we should emit a warning. *)
+(* We use expand_head_opt version of expand_head to get access
+   to the manifest type of private abbreviations. *)
+let rec get_unboxed_type_representation env ty fuel =
+  if fuel < 0 then Error ty else
+  let ty = expand_head_opt env ty in
+  match get_desc ty with
+  | Tconstr (p, args, _) ->
+    begin match Env.find_type p env with
+    | exception Not_found -> Ok ty
+    | decl ->
+      begin match find_unboxed_type decl with
+      | None -> Ok ty
+      | Some ty2 ->
+        let ty2 = match get_desc ty2 with Tpoly (t, _) -> t | _ -> ty2 in
+        get_unboxed_type_representation env
+          (apply env decl.type_params ty2 args) (fuel - 1)
+      end
     end
+  | _ -> Ok ty
+
+let get_unboxed_type_representation env ty =
+  (* Do not give too much fuel: PR#7424 *)
+  get_unboxed_type_representation env ty 100
+
+let get_unboxed_type_approximation env ty =
+  match get_unboxed_type_representation env ty with
+  | Ok ty | Error ty -> ty
+
+let kind_immediacy_approx = function
+  | Type_open | Type_record _ -> Type_immediacy.Unknown
+  | Type_abstract { immediate } -> immediate
+  | Type_variant (cstrs, _) ->
+     if List.exists (fun c -> c.Types.cd_args <> Types.Cstr_tuple []) cstrs
+     then Type_immediacy.Unknown
+     else Type_immediacy.Always
+
+let type_immediacy_head env ty =
+  match get_desc ty with
+  | Tconstr(p, _args, _abbrev) ->
+     begin match Env.find_type p env with
+     | { type_kind = k; _ } -> kind_immediacy_approx k
+     | exception Not_found -> Type_immediacy.Unknown
+     end
   | Tvariant row ->
       (* if all labels are devoid of arguments, not a pointer *)
       if
@@ -5605,3 +5726,58 @@ let immediacy env typ =
       else
         Type_immediacy.Always
   | _ -> Type_immediacy.Unknown
+
+let check_type_immediate env ty imm =
+  match Type_immediacy.coerce (type_immediacy_head env ty) ~as_:imm with
+  | Ok () -> Ok ()
+  | Error _ ->
+    let ty = get_unboxed_type_approximation env ty in
+    Type_immediacy.coerce (type_immediacy_head env ty) ~as_:imm
+
+let check_decl_immediate env decl imm =
+  match find_unboxed_type decl with
+  | Some arg -> check_type_immediate env arg imm
+  | None ->
+    (* Check the kind first, even if there is a manifest, in case of missing
+       cmis *)
+    let kind_imm = kind_immediacy_approx decl.type_kind in
+    match Type_immediacy.coerce kind_imm ~as_:imm, decl.type_manifest with
+    | Ok (), _ -> Ok ()
+    | Error _ as err, None -> err
+    | Error _, Some ty -> check_type_immediate env ty imm
+
+let is_always_global env ty =
+  let perform_check () =
+    Result.is_ok (check_type_immediate env ty Always_on_64bits)
+  in
+  if !Clflags.principal || Env.has_local_constraints env then
+    (* We snapshot to keep this pure; see the mode crossing test that mentions
+       snapshotting for an example. *)
+    let snap = Btype.snapshot () in
+    let result = perform_check () in
+    Btype.backtrack snap;
+    result
+  else
+    perform_check ()
+
+(* For use with ocamldebug *)
+type global_state =
+  { current_level : int ref;
+    nongen_level : int ref;
+    global_level : int ref;
+  }
+
+let global_state : global_state =
+  { current_level;
+    nongen_level;
+    global_level;
+  }
+
+let print_global_state fmt global_state =
+  let print_field fmt s r = Format.fprintf fmt "%s = %d;@;" s !r in
+  let print_fields fmt { current_level; nongen_level; global_level; } =
+    print_field fmt "current_level" current_level;
+    print_field fmt "nongen_level" nongen_level;
+    print_field fmt "global_level" global_level;
+  in
+  Format.fprintf fmt "@[<1>{@;%a}@]" print_fields global_state

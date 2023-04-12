@@ -40,6 +40,10 @@ let mk_binannot f =
   "-bin-annot", Arg.Unit f, " Save typedtree in <filename>.cmt"
 ;;
 
+let mk_binannot_cms f =
+  "-bin-annot-cms", Arg.Unit f, " Save shapes in <filename>.cms"
+;;
+
 let mk_c f =
   "-c", Arg.Unit f, " Compile only (do not link)"
 ;;
@@ -591,10 +595,6 @@ let mk_no_unboxed_types f =
   " unannotated unboxable types will not be unboxed (default)"
 ;;
 
-let mk_force_tmc f =
-  "-force-tmc", Arg.Unit f, " Rewrite all possible TMC calls"
-;;
-
 let mk_unsafe f =
   "-unsafe", Arg.Unit f,
   " Do not compile bounds checking on array and string access"
@@ -732,18 +732,40 @@ let mk_dump_into_file f =
 
 let mk_extension f =
   let available_extensions =
-    Clflags.Extension.(List.map to_string all)
+    Language_extension.(List.map to_string all)
   in
   "-extension", Arg.Symbol (available_extensions, f),
-  "<extension>  Enable the extension (may be specified more than once)"
+  "  Enable the specified extension (may be specified more than once)"
+;;
+
+let mk_no_extension f =
+  let available_extensions =
+    Language_extension.(List.map to_string all)
+  in
+  "-no-extension", Arg.Symbol (available_extensions, f),
+  "  Disable the specified extension (may be specified more than once)"
 ;;
 
 let mk_disable_all_extensions f =
   "-disable-all-extensions", Arg.Unit f,
-  " Disable all extensions, wherever they are specified; this flag\n\
-  \    overrides the -extension flag (whether specified before or after this\n\
-  \    flag), disables any extensions that are enabled by default, and\n\
-  \    ignores any extensions requested in OCAMLPARAM."
+  "  Disable all extensions, wherever they have been specified; this\n\
+  \    flag overrides prior uses of the -extension flag, disables any\n\
+  \    extensions that are enabled by default, and causes future uses of\n\
+  \    the -extension flag to raise an error."
+;;
+
+let mk_only_erasable_extensions f =
+  let erasable_extensions =
+    let open Language_extension in
+    all |> List.filter is_erasable |> List.map to_string |> String.concat ", "
+  in
+"-only-erasable-extensions", Arg.Unit f,
+  "  Disable all extensions that cannot be \"erased\" to attributes,\n\
+  \    wherever they have been specified; this flag overrides prior\n\
+  \    contradictory uses of the -extension flag, raises an error on\n\
+  \    future such uses, and disables any such extensions that are\n\
+  \    enabled by default.\n\
+  \    (Erasable extensions: " ^ erasable_extensions ^ ")"
 ;;
 
 let mk_dump_dir f =
@@ -959,7 +981,9 @@ module type Common_options = sig
   val _app_funct : unit -> unit
   val _no_app_funct : unit -> unit
   val _disable_all_extensions : unit -> unit
+  val _only_erasable_extensions : unit -> unit
   val _extension : string -> unit
+  val _no_extension : string -> unit
   val _noassert : unit -> unit
   val _nolabels : unit -> unit
   val _nostdlib : unit -> unit
@@ -975,7 +999,6 @@ module type Common_options = sig
   val _no_strict_sequence : unit -> unit
   val _strict_formats : unit -> unit
   val _no_strict_formats : unit -> unit
-  val _force_tmc : unit -> unit
   val _unboxed_types : unit -> unit
   val _no_unboxed_types : unit -> unit
   val _unsafe_string : unit -> unit
@@ -1012,6 +1035,7 @@ module type Compiler_options = sig
   val _a : unit -> unit
   val _annot : unit -> unit
   val _binannot : unit -> unit
+  val _binannot_cms : unit -> unit
   val _c : unit -> unit
   val _cc : string -> unit
   val _cclib : string -> unit
@@ -1210,6 +1234,7 @@ struct
     mk_absname F._absname;
     mk_annot F._annot;
     mk_binannot F._binannot;
+    mk_binannot_cms F._binannot_cms;
     mk_c F._c;
     mk_cc F._cc;
     mk_cclib F._cclib;
@@ -1221,10 +1246,12 @@ struct
     mk_config_var F._config_var;
     mk_custom F._custom;
     mk_disable_all_extensions F._disable_all_extensions;
+    mk_only_erasable_extensions F._only_erasable_extensions;
     mk_dllib F._dllib;
     mk_dllpath F._dllpath;
     mk_dtypes F._annot;
     mk_extension F._extension;
+    mk_no_extension F._no_extension;
     mk_for_pack_byt F._for_pack;
     mk_g_byt F._g;
     mk_stop_after ~native:false F._stop_after;
@@ -1277,7 +1304,6 @@ struct
     mk_strict_formats F._strict_formats;
     mk_no_strict_formats F._no_strict_formats;
     mk_thread F._thread;
-    mk_force_tmc F._force_tmc;
     mk_unboxed_types F._unboxed_types;
     mk_no_unboxed_types F._no_unboxed_types;
     mk_unsafe F._unsafe;
@@ -1334,7 +1360,9 @@ struct
     mk_app_funct F._app_funct;
     mk_no_app_funct F._no_app_funct;
     mk_disable_all_extensions F._disable_all_extensions;
+    mk_only_erasable_extensions F._only_erasable_extensions;
     mk_extension F._extension;
+    mk_no_extension F._no_extension;
     mk_noassert F._noassert;
     mk_noinit F._noinit;
     mk_nolabels F._nolabels;
@@ -1398,6 +1426,7 @@ struct
     mk_afl_inst_ratio F._afl_inst_ratio;
     mk_annot F._annot;
     mk_binannot F._binannot;
+    mk_binannot_cms F._binannot_cms;
     mk_inline_branch_factor F._inline_branch_factor;
     mk_c F._c;
     mk_cc F._cc;
@@ -1412,7 +1441,9 @@ struct
     mk_config_var F._config_var;
     mk_dtypes F._annot;
     mk_disable_all_extensions F._disable_all_extensions;
+    mk_only_erasable_extensions F._only_erasable_extensions;
     mk_extension F._extension;
+    mk_no_extension F._no_extension;
     mk_for_pack_opt F._for_pack;
     mk_g_opt F._g;
     mk_function_sections F._function_sections;
@@ -1487,7 +1518,6 @@ struct
     mk_strict_formats F._strict_formats;
     mk_no_strict_formats F._no_strict_formats;
     mk_thread F._thread;
-    mk_force_tmc F._force_tmc;
     mk_unbox_closures F._unbox_closures;
     mk_unbox_closures_factor F._unbox_closures_factor;
     mk_inline_max_unroll F._inline_max_unroll;
@@ -1581,7 +1611,9 @@ module Make_opttop_options (F : Opttop_options) = struct
     mk_app_funct F._app_funct;
     mk_no_app_funct F._no_app_funct;
     mk_disable_all_extensions F._disable_all_extensions;
+    mk_only_erasable_extensions F._only_erasable_extensions;
     mk_extension F._extension;
+    mk_no_extension F._no_extension;
     mk_no_float_const_prop F._no_float_const_prop;
     mk_noassert F._noassert;
     mk_noinit F._noinit;
@@ -1675,7 +1707,9 @@ struct
     mk_app_funct F._app_funct;
     mk_no_app_funct F._no_app_funct;
     mk_disable_all_extensions F._disable_all_extensions;
+    mk_only_erasable_extensions F._only_erasable_extensions;
     mk_extension F._extension;
+    mk_no_extension F._no_extension;
     mk_noassert F._noassert;
     mk_nolabels F._nolabels;
     mk_nostdlib F._nostdlib;
@@ -1693,7 +1727,6 @@ struct
     mk_strict_formats F._strict_formats;
     mk_no_strict_formats F._no_strict_formats;
     mk_thread F._thread;
-    mk_force_tmc F._force_tmc;
     mk_unboxed_types F._unboxed_types;
     mk_no_unboxed_types F._no_unboxed_types;
     mk_unsafe_string F._unsafe_string;
@@ -1771,8 +1804,11 @@ module Default = struct
     let _no_strict_formats = clear strict_formats
     let _no_strict_sequence = clear strict_sequence
     let _no_unboxed_types = clear unboxed_types
-    let _disable_all_extensions = Extension.disable_all
-    let _extension s = Extension.enable s
+    let _disable_all_extensions = Language_extension.disallow_extensions
+    let _only_erasable_extensions =
+      Language_extension.restrict_to_erasable_extensions
+    let _extension s = Language_extension.(enable (of_string_exn s))
+    let _no_extension s = Language_extension.(disable (of_string_exn s))
     let _noassert = set noassert
     let _nolabels = set classic
     let _nostdlib = set no_std_include
@@ -1918,6 +1954,7 @@ module Default = struct
     let _args = Arg.read_arg
     let _args0 = Arg.read_arg0
     let _binannot = set binary_annotations
+    let _binannot_cms = set binary_annotations_cms
     let _c = set compile_only
     let _cc s = c_compiler := (Some s)
     let _cclib s = Compenv.defer (ProcessObjects (Misc.rev_split_words s))
@@ -1993,7 +2030,6 @@ module Default = struct
     let _noprompt = set noprompt
     let _nopromptcont = set nopromptcont
     let _stdin () = (* placeholder: file_argument ""*) ()
-    let _force_tmc = set force_tmc
     let _version () = print_version ()
     let _vnum () = print_version_num ()
     let _eval (_:string) = ()
@@ -2030,7 +2066,6 @@ module Default = struct
         "Profiling with \"gprof\" (option `-p') is only supported up to \
          OCaml 4.08.0"
     let _shared () = shared := true; dlcode := true
-    let _force_tmc = set force_tmc
     let _v () = Compenv.print_version_and_library "native-code compiler"
     let _no_probes = clear probes
     let _probes = set probes
@@ -2053,7 +2088,6 @@ module Default = struct
     let _pp s = Clflags.preprocessor := (Some s)
     let _ppx s = Clflags.all_ppx := (s :: (!Clflags.all_ppx))
     let _thread = set Clflags.use_threads
-    let _force_tmc = set force_tmc
     let _v () = Compenv.print_version_and_library "documentation generator"
     let _verbose = set Clflags.verbose
     let _version = Compenv.print_version_string
@@ -2087,7 +2121,6 @@ third-party libraries such as Lwt, but with a different API."
     let _output_complete_exe () =
       _output_complete_obj (); output_complete_executable := true
     let _output_obj () = output_c_object := true; custom_runtime := true
-    let _force_tmc = set force_tmc
     let _use_prims s = use_prims := s
     let _use_runtime s = use_runtime := s
     let _v () = Compenv.print_version_and_library "compiler"

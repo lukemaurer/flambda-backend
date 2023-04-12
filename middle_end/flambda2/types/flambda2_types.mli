@@ -232,7 +232,7 @@ module Typing_env : sig
 
     val get_singleton : t -> Simple.t option
 
-    val choose_opt : t -> Simple.t option
+    val find_best : t -> Simple.t option
 
     val inter : t -> t -> t
 
@@ -479,27 +479,28 @@ val closure_with_at_least_this_value_slot :
   this_function_slot:Function_slot.t ->
   Value_slot.t ->
   value_slot_var:Variable.t ->
+  value_slot_kind:Flambda_kind.With_subkind.t ->
   flambda_type
 
 val closure_with_at_least_these_value_slots :
   this_function_slot:Function_slot.t ->
-  Variable.t Value_slot.Map.t ->
+  (Variable.t * Flambda_kind.With_subkind.t) Value_slot.Map.t ->
   flambda_type
 
 val array_of_length :
-  element_kind:Flambda_kind.With_subkind.t Or_unknown.t ->
+  element_kind:Flambda_kind.With_subkind.t Or_unknown_or_bottom.t ->
   length:flambda_type ->
   Alloc_mode.For_types.t ->
   flambda_type
 
 val mutable_array :
-  element_kind:Flambda_kind.With_subkind.t Or_unknown.t ->
+  element_kind:Flambda_kind.With_subkind.t Or_unknown_or_bottom.t ->
   length:flambda_type ->
   Alloc_mode.For_types.t ->
   flambda_type
 
 val immutable_array :
-  element_kind:Flambda_kind.With_subkind.t Or_unknown.t ->
+  element_kind:Flambda_kind.With_subkind.t Or_unknown_or_bottom.t ->
   fields:flambda_type list ->
   Alloc_mode.For_types.t ->
   flambda_type
@@ -619,7 +620,9 @@ val prove_is_immediates_array : Typing_env.t -> t -> unit proof_of_property
 val meet_is_immutable_array :
   Typing_env.t ->
   t ->
-  (Flambda_kind.With_subkind.t Or_unknown.t * t * Alloc_mode.For_types.t)
+  (Flambda_kind.With_subkind.t Or_unknown_or_bottom.t
+  * t
+  * Alloc_mode.For_types.t)
   meet_shortcut
 
 val meet_single_closures_entry :
@@ -733,6 +736,6 @@ val reify :
   reification_result
 
 val never_holds_locally_allocated_values :
-  Typing_env.t -> Variable.t -> Flambda_kind.t -> unit proof_of_property
+  Typing_env.t -> Variable.t -> unit proof_of_property
 
 val remove_outermost_alias : Typing_env.t -> t -> t

@@ -81,6 +81,7 @@ val all_ppx : string list ref
 val absname : bool ref
 val annotations : bool ref
 val binary_annotations : bool ref
+val binary_annotations_cms : bool ref
 val use_threads : bool ref
 val noassert : bool ref
 val verbose : bool ref
@@ -172,7 +173,6 @@ val dlcode : bool ref
 val pic_code : bool ref
 val runtime_variant : string ref
 val with_runtime : bool ref
-val force_tmc : bool ref
 val force_slash : bool ref
 val keep_docs : bool ref
 val keep_locs : bool ref
@@ -205,15 +205,6 @@ val set_dumped_pass : string -> bool -> unit
 
 val dump_into_file : bool ref
 val dump_dir : string option ref
-
-module Extension : sig
-  type t = Comprehensions | Local | Include_functor
-  val enable : string -> unit
-  val is_enabled : t -> bool
-  val to_string : t -> string
-  val all : t list
-  val disable_all : unit -> unit
-end
 
 (* Support for flags that can also be set from an environment variable *)
 type 'a env_reader = {

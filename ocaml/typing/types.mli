@@ -71,7 +71,8 @@ type type_desc =
       [Tarrow (Labelled "l", e1, e2, c)] ==> [l:e1  -> e2]
       [Tarrow (Optional "l", e1, e2, c)] ==> [?l:e1 -> e2]
 
-      See [commutable] for the last argument. *)
+      See [commutable] for the last argument. The argument
+      type must be a [Tpoly] node *)
 
   | Ttuple of type_expr list
   (** [Ttuple [t1;...;tn]] ==> [(t1 * ... * tn)] *)
@@ -491,7 +492,6 @@ type type_declaration =
     type_expansion_scope: int;
     type_loc: Location.t;
     type_attributes: Parsetree.attributes;
-    type_immediate: Type_immediacy.t;
     type_unboxed_default: bool;
     (* true if the unboxed-ness of this type was chosen by a compiler flag *)
     type_uid: Uid.t;
@@ -500,10 +500,16 @@ type type_declaration =
 and type_decl_kind = (label_declaration, constructor_declaration) type_kind
 
 and ('lbl, 'cstr) type_kind =
-    Type_abstract
+    Type_abstract of {immediate : Type_immediacy.t}
   | Type_record of 'lbl list  * record_representation
   | Type_variant of 'cstr list * variant_representation
   | Type_open
+(* In the case of abbreviations (declarations whose kind is [Type_abstract] and
+   which have a manifest), the [immediate] field of [Type_abstract] is a
+   conservative approximation (it may be [Unknown] when the type is actually
+   immediate).  It is therefore necessary to check the manifest.  See PR#10017
+   for motivating examples where subsitution or instantiation may refine the
+   immediacy of a type.  *)
 
 and record_representation =
     Record_regular                      (* All fields are boxed / tagged *)
@@ -543,8 +549,15 @@ and constructor_declaration =
   }
 
 and constructor_arguments =
-  | Cstr_tuple of type_expr list
+  | Cstr_tuple of (type_expr * global_flag) list
   | Cstr_record of label_declaration list
+
+(* The kind of an abstract type declaration with an unknown immediacy *)
+val kind_abstract : ('a,'b) type_kind
+val decl_is_abstract : type_declaration -> bool
+
+(* Returns the inner type, if unboxed. *)
+val find_unboxed_type : type_declaration -> type_expr option
 
 type extension_constructor =
   {
@@ -658,7 +671,7 @@ type constructor_description =
   { cstr_name: string;                  (* Constructor name *)
     cstr_res: type_expr;                (* Type of the result *)
     cstr_existentials: type_expr list;  (* list of existentials *)
-    cstr_args: type_expr list;          (* Type of the arguments *)
+    cstr_args: (type_expr * global_flag) list;          (* Type of the arguments *)
     cstr_arity: int;                    (* Number of arguments *)
     cstr_tag: constructor_tag;          (* Tag for heap blocks *)
     cstr_consts: int;                   (* Number of constant constructors *)

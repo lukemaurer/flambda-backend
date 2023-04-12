@@ -167,10 +167,15 @@ type privacy_mismatch =
   | Private_extensible_variant
   | Private_row_type
 
+type locality_mismatch =
+  { order : position;
+    nonlocal : bool
+  }
+
 type label_mismatch =
   | Type of Errortrace.equality_error
   | Mutability of position
-  | Nonlocality of position * bool
+  | Nonlocality of locality_mismatch
 
 type record_change =
   (Types.label_declaration, Types.label_declaration, label_mismatch)
@@ -186,6 +191,7 @@ type constructor_mismatch =
   | Inline_record of record_change list
   | Kind of position
   | Explicit_return_type of position
+  | Nonlocality of int * locality_mismatch
 
 type extension_constructor_mismatch =
   | Constructor_privacy
@@ -220,8 +226,19 @@ type type_mismatch =
   | Variance
   | Record_mismatch of record_mismatch
   | Variant_mismatch of variant_change list
-  | Unboxed_representation of position
+  | Unboxed_representation of position * attributes
   | Immediate of Type_immediacy.Violation.t
+
+let report_locality_mismatch first second ppf err =
+  let {order; nonlocal} = err in
+  let sort =
+    if nonlocal then "nonlocal"
+    else "global"
+  in
+  Format.fprintf ppf "%s is %s and %s is not."
+    (String.capitalize_ascii  (choose order first second))
+    sort
+    (choose_other order first second)
 
 let report_primitive_mismatch first second ppf err =
   let pr fmt = Format.fprintf ppf fmt in
@@ -287,15 +304,7 @@ let report_label_mismatch first second env ppf err =
       Format.fprintf ppf "%s is mutable and %s is not."
         (String.capitalize_ascii (choose ord first second))
         (choose_other ord first second)
-  | Nonlocality(ord, nonlocal) ->
-      let sort =
-        if nonlocal then "nonlocal"
-        else "global"
-      in
-      Format.fprintf ppf "%s is %s and %s is not."
-        (String.capitalize_ascii  (choose ord first second))
-        sort
-        (choose_other ord first second)
+  | Nonlocality err_ -> report_locality_mismatch first second ppf err_
 
 let pp_record_diff first second prefix decl env ppf (x : record_change) =
   match x with
@@ -362,6 +371,10 @@ let report_constructor_mismatch first second decl env ppf err =
       pr "%s has explicit return type and %s doesn't."
         (String.capitalize_ascii (choose ord first second))
         (choose_other ord first second)
+  | Nonlocality (i, err) ->
+      pr "Locality mismatch at argument position %i : %a"
+        (i + 1) (report_locality_mismatch first second) err
+        (* argument position is one-based; more intuitive *)
 
 let pp_variant_diff first second prefix decl env ppf (x : variant_change) =
   match x with
@@ -456,10 +469,13 @@ let report_type_mismatch first second decl env ppf err =
       report_record_mismatch first second decl env ppf err
   | Variant_mismatch err ->
       report_patch pp_variant_diff first second decl env ppf err
-  | Unboxed_representation ord ->
+  | Unboxed_representation (ord, attrs) ->
       pr "Their internal representations differ:@ %s %s %s."
          (choose ord first second) decl
-         "uses unboxed representation"
+         "uses unboxed representation";
+      if Builtin_attributes.has_unboxed attrs then
+        pr "@ Hint: %s %s has [%@unboxed]. Did you mean [%@%@unboxed]?"
+          (choose ord second first) decl
   | Immediate violation ->
       let first = StringLabels.capitalize_ascii first in
       match violation with
@@ -469,35 +485,43 @@ let report_type_mismatch first second decl env ppf err =
           pr "%s is not a type that is always immediate on 64 bit platforms."
             first
 
+let compare_global_flags flag0 flag1 =
+  match flag0, flag1 with
+  | Global, (Nonlocal | Unrestricted) ->
+    Some {order = First; nonlocal = false}
+  | (Nonlocal | Unrestricted), Global ->
+    Some {order = Second; nonlocal = false}
+  | Nonlocal, Unrestricted ->
+    Some {order = First; nonlocal = true}
+  | Unrestricted, Nonlocal ->
+    Some {order = Second; nonlocal = true}
+  | Global, Global
+  | Nonlocal, Nonlocal
+  | Unrestricted, Unrestricted ->
+    None
+
 module Record_diffing = struct
 
   let compare_labels env params1 params2
-      (ld1 : Types.label_declaration)
-      (ld2 : Types.label_declaration) =
-    if ld1.ld_mutable <> ld2.ld_mutable
-    then
-      let ord = if ld1.ld_mutable = Asttypes.Mutable then First else Second in
-      Some (Mutability ord)
-    else begin
-      match ld1.ld_global, ld2.ld_global with
-      | Global, (Nonlocal | Unrestricted) ->
-        Some (Nonlocality(First, false))
-      | (Nonlocal | Unrestricted), Global ->
-        Some (Nonlocality(Second, false))
-      | Nonlocal, Unrestricted ->
-        Some (Nonlocality(First, true))
-      | Unrestricted, Nonlocal ->
-        Some (Nonlocality(Second, true))
-      | Global, Global
-      | Nonlocal, Nonlocal
-      | Unrestricted, Unrestricted ->
-        let tl1 = params1 @ [ld1.ld_type] in
-        let tl2 = params2 @ [ld2.ld_type] in
-        match Ctype.equal env true tl1 tl2 with
-        | exception Ctype.Equality err ->
-            Some (Type err : label_mismatch)
-        | () -> None
-    end
+        (ld1 : Types.label_declaration)
+        (ld2 : Types.label_declaration) =
+        if ld1.ld_mutable <> ld2.ld_mutable
+        then
+          let ord = if ld1.ld_mutable = Asttypes.Mutable then First else Second in
+          Some (Mutability ord)
+        else begin
+          match compare_global_flags ld1.ld_global ld2.ld_global with
+          | None ->
+            let tl1 = params1 @ [ld1.ld_type] in
+            let tl2 = params2 @ [ld2.ld_type] in
+            begin
+            match Ctype.equal env true tl1 tl2 with
+            | exception Ctype.Equality err ->
+                Some (Type err : label_mismatch)
+            | () -> None
+            end
+          | Some e -> Some (Nonlocality e : label_mismatch)
+        end
 
   let rec equal ~loc env params1 params2
       (labels1 : Types.label_declaration list)
@@ -597,8 +621,8 @@ module Record_diffing = struct
     else
      match rep1, rep2 with
      | Record_unboxed _, Record_unboxed _ -> None
-     | Record_unboxed _, _ -> Some (Unboxed_representation First)
-     | _, Record_unboxed _ -> Some (Unboxed_representation Second)
+     | Record_unboxed _, _ -> Some (Unboxed_representation (First, []))
+     | _, Record_unboxed _ -> Some (Unboxed_representation (Second, []))
 
      | Record_float, Record_float -> None
      | Record_float, _ ->
@@ -615,6 +639,15 @@ module Record_diffing = struct
 
 end
 
+(* just like List.find_map, but also gives index if found *)
+let rec find_map_idx f ?(off = 0) l =
+  match l with
+  | [] -> None
+  | x :: xs -> begin
+      match f x with
+      | None -> find_map_idx f ~off:(off+1) xs
+      | Some y -> Some (off, y)
+    end
 
 module Variant_diffing = struct
 
@@ -624,11 +657,16 @@ module Variant_diffing = struct
         if List.length arg1 <> List.length arg2 then
           Some (Arity : constructor_mismatch)
         else begin
-        (* Ctype.equal must be called on all arguments at once, cf. PR#7378 *)
-        match Ctype.equal env true (params1 @ arg1) (params2 @ arg2) with
-        | exception Ctype.Equality err -> Some (Type err)
-        | () -> None
-      end
+          let arg1_tys, arg1_gfs = List.split arg1
+          and arg2_tys, arg2_gfs = List.split arg2
+          in
+          (* Ctype.equal must be called on all arguments at once, cf. PR#7378 *)
+          match Ctype.equal env true (params1 @ arg1_tys) (params2 @ arg2_tys) with
+          | exception Ctype.Equality err -> Some (Type err)
+          | () -> List.combine arg1_gfs arg2_gfs
+                  |> find_map_idx (fun (x,y) -> compare_global_flags x y)
+                  |> Option.map (fun (i, err) -> Nonlocality (i, err))
+        end
     | Types.Cstr_record l1, Types.Cstr_record l2 ->
         Option.map
           (fun rec_err -> Inline_record rec_err)
@@ -731,6 +769,11 @@ module Variant_diffing = struct
       cstrs1 cstrs2 rep1 rep2
     =
     let err = compare ~loc env params1 params2 cstrs1 cstrs2 in
+    let attrs_of_only cstrs =
+      match cstrs with
+      | [cstr] -> cstr.Types.cd_attributes
+      | _ -> []
+    in
     match err, rep1, rep2 with
     | None, Variant_regular, Variant_regular
     | None, Variant_unboxed, Variant_unboxed ->
@@ -738,9 +781,9 @@ module Variant_diffing = struct
     | Some err, _, _ ->
         Some (Variant_mismatch err)
     | None, Variant_unboxed, Variant_regular ->
-        Some (Unboxed_representation First)
+        Some (Unboxed_representation (First, attrs_of_only cstrs2))
     | None, Variant_regular, Variant_unboxed ->
-        Some (Unboxed_representation Second)
+        Some (Unboxed_representation (Second, attrs_of_only cstrs1))
 end
 
 (* Inclusion between "private" annotations *)
@@ -751,7 +794,7 @@ let privacy_mismatch env decl1 decl2 =
       | Type_record  _, Type_record  _ -> Some Private_record_type
       | Type_variant _, Type_variant _ -> Some Private_variant_type
       | Type_open,      Type_open      -> Some Private_extensible_variant
-      | Type_abstract, Type_abstract
+      | Type_abstract _, Type_abstract _
         when Option.is_some decl2.type_manifest -> begin
           match decl1.type_manifest with
           | Some ty1 -> begin
@@ -888,7 +931,7 @@ let type_manifest env ty1 params1 ty2 params2 priv2 kind2 =
   | _ -> begin
       let is_private_abbrev_2 =
         match priv2, kind2 with
-        | Private, Type_abstract -> begin
+        | Private, Type_abstract _ -> begin
             (* Same checks as the [when] guards from above, inverted *)
             match get_desc ty2' with
             | Tvariant row ->
@@ -947,7 +990,15 @@ let type_declarations ?(equality = false) ~loc env ~mark name
   in
   if err <> None then err else
   let err = match (decl1.type_kind, decl2.type_kind) with
-      (_, Type_abstract) -> None
+      (_, Type_abstract { immediate = imm }) ->
+       (* Note that [imm] is an approximation (it may be [Unknown] even if
+          [decl2] is actually immediate). In that case, [decl2] must have a
+          manifest, which we're already checking for equality above. Similarly,
+          [decl1]'s kind may conservatively approximate its immediacy, but
+          [check_decl_immediate] will expand its manifest.  *)
+       (match Ctype.check_decl_immediate env decl1 imm with
+        | Ok () -> None
+        | Error v -> Some (Immediate v))
     | (Type_variant (cstrs1, rep1), Type_variant (cstrs2, rep2)) ->
         if mark then begin
           let mark usage cstrs =
@@ -987,20 +1038,7 @@ let type_declarations ?(equality = false) ~loc env ~mark name
     | (_, _) -> Some Kind
   in
   if err <> None then err else
-  let abstr = decl2.type_kind = Type_abstract && decl2.type_manifest = None in
-  (* If attempt to assign a non-immediate type (e.g. string) to a type that
-   * must be immediate, then we error *)
-  let err =
-    if not abstr then
-      None
-    else
-      match
-        Type_immediacy.coerce decl1.type_immediate ~as_:decl2.type_immediate
-      with
-      | Ok () -> None
-      | Error violation -> Some (Immediate violation)
-  in
-  if err <> None then err else
+  let abstr = decl_is_abstract decl2 && decl2.type_manifest = None in
   let need_variance =
     abstr || decl1.type_private = Private || decl1.type_kind = Type_open in
   if not need_variance then None else

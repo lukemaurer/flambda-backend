@@ -64,6 +64,7 @@ val new_global_var: ?name:string -> unit -> type_expr
            (as type variables ['a] in type constraints). *)
 val newobj: type_expr -> type_expr
 val newconstr: Path.t -> type_expr list -> type_expr
+val newmono : type_expr -> type_expr
 val none: type_expr
         (* A dummy type expression *)
 
@@ -154,7 +155,7 @@ val new_local_type:
 val existential_name: constructor_description -> type_expr -> string
 val instance_constructor:
         ?in_pattern:Env.t ref * int ->
-        constructor_description -> type_expr list * type_expr * type_expr list
+        constructor_description -> (type_expr * global_flag) list * type_expr * type_expr list
         (* Same, for a constructor. Also returns existentials. *)
 val instance_parameterized_type:
         ?keep_names:bool ->
@@ -228,7 +229,7 @@ val extract_concrete_typedecl:
 val unify: Env.t -> type_expr -> type_expr -> unit
         (* Unify the two types given. Raise [Unify] if not possible. *)
 val unify_gadt:
-        equations_level:int -> allow_recursive:bool ->
+        equations_level:int -> allow_recursive_equations:bool ->
         Env.t ref -> type_expr -> type_expr -> Btype.TypePairs.t
         (* Unify the two types given and update the environment with the
            local constraints. Raise [Unify] if not possible.
@@ -236,10 +237,21 @@ val unify_gadt:
 val unify_var: Env.t -> type_expr -> type_expr -> unit
         (* Same as [unify], but allow free univars when first type
            is a variable. *)
-val filter_arrow: Env.t -> type_expr -> arg_label ->
+val filter_arrow: Env.t -> type_expr -> arg_label -> force_tpoly:bool ->
                   alloc_mode * type_expr * alloc_mode * type_expr
-        (* A special case of unification with [l:'a -> 'b].  Raises
-           [Filter_arrow_failed] instead of [Unify]. *)
+        (* A special case of unification (with l:'a -> 'b). If
+           [force_poly] is false then the usual invariant that the
+           argument type be a [Tpoly] node is not enforced. Raises
+           [Filter_arrow_failed] instead of [Unify].  *)
+val filter_mono: type_expr -> type_expr
+        (* A special case of unification (with Tpoly('a, [])). Can
+           only be called on [Tpoly] nodes. Raises [Filter_mono_failed]
+           instead of [Unify] *)
+val filter_arrow_mono: Env.t -> type_expr -> arg_label ->
+                  alloc_mode * type_expr * alloc_mode * type_expr
+        (* A special case of unification. Composition of [filter_arrow]
+           with [filter_mono] on the argument type. Raises
+           [Filter_arrow_mono_failed] instead of [Unify] *)
 val filter_method: Env.t -> string -> type_expr -> type_expr
         (* A special case of unification (with {m : 'a; 'b}).  Raises
            [Filter_method_failed] instead of [Unify]. *)
@@ -275,6 +287,9 @@ type filter_arrow_failure =
   | Not_a_function
 
 exception Filter_arrow_failed of filter_arrow_failure
+
+exception Filter_mono_failed
+exception Filter_arrow_mono_failed
 
 type filter_method_failure =
   | Unification_error of Errortrace.unification_error
@@ -398,11 +413,12 @@ val remove_mode_variables: type_expr -> unit
 
 val nongen_schema: Env.t -> type_expr -> bool
         (* Check whether the given type scheme contains no non-generic
-           type variables *)
+           type variables, and ensure mode variables are fully determined *)
 
 val nongen_class_declaration: class_declaration -> bool
         (* Check whether the given class type contains no non-generic
-           type variables. Uses the empty environment.  *)
+           type variables, and ensures mode variables are fully determined.
+           Uses the empty environment.  *)
 
 val free_variables: ?env:Env.t -> type_expr -> type_expr list
         (* If env present, then check for incomplete definitions too *)
@@ -425,8 +441,6 @@ val get_current_level: unit -> int
 val wrap_trace_gadt_instances: Env.t -> ('a -> 'b) -> 'a -> 'b
 val reset_reified_var_counter: unit -> unit
 
-val immediacy : Env.t -> type_expr -> Type_immediacy.t
-
 (* Stubs *)
 val package_subtype :
     (Env.t -> Path.t -> (Longident.t * type_expr) list ->
@@ -434,3 +448,37 @@ val package_subtype :
 
 (* Raises [Incompatible] *)
 val mcomp : Env.t -> type_expr -> type_expr -> unit
+
+val get_unboxed_type_representation :
+  Env.t -> type_expr -> (type_expr, type_expr) result
+    (* [get_unboxed_type_representation] attempts to fully expand the input
+       type_expr, descending through [@@unboxed] types.  May fail in the case of
+       circular types or very deeply nested unboxed types, in which case it
+       returns the most expanded version it was able to compute. *)
+
+val get_unboxed_type_approximation : Env.t -> type_expr -> type_expr
+    (* [get_unboxed_type_approximation] does the same thing as
+       [get_unboxed_type_representation], but doesn't indicate whether the type
+       was fully expanded or not. *)
+
+(* [kind_immediacy_approx] may be a conservative approximation (return Unknown
+   for types that are actually immediate) in two cases: [@@unboxed] types, and
+   abbreviations (abstract types with a manifest).  *)
+val kind_immediacy_approx : type_decl_kind -> Type_immediacy.t
+val check_decl_immediate :
+  Env.t -> type_declaration -> Type_immediacy.t ->
+  (unit, Type_immediacy.Violation.t) result
+
+val check_type_immediate :
+  Env.t -> type_expr -> Type_immediacy.t ->
+  (unit, Type_immediacy.Violation.t) result
+
+(* True if a type is always global (i.e., it mode crosses for local).  This is
+   true for all immediate and immediate64 types.  To make it sound for
+   immediate64, we've disabled stack allocation on 32-bit builds. *)
+val is_always_global : Env.t -> type_expr -> bool
+
+(* For use with ocamldebug *)
+type global_state
+val global_state : global_state
+val print_global_state : Format.formatter -> global_state -> unit

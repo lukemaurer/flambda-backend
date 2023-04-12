@@ -194,19 +194,24 @@ let rebuild_arm uacc arm (action, use_id, arity, env_at_use)
     let arms = Targetint_31_63.Map.add arm action arms in
     new_let_conts, arms, Not_mergeable, identity_arms, not_arms
 
-let find_cse_simple dacc prim =
+let filter_and_choose_alias required_names alias_set =
+  let available_alias_set =
+    Alias_set.filter alias_set ~f:(fun alias ->
+        Simple.pattern_match alias
+          ~name:(fun name ~coercion:_ -> Name.Set.mem name required_names)
+          ~const:(fun _ -> true))
+  in
+  Alias_set.find_best available_alias_set
+
+let find_cse_simple dacc required_names prim =
   match P.Eligible_for_cse.create prim with
   | None -> None (* Constant *)
   | Some with_fixed_value -> (
     match DE.find_cse (DA.denv dacc) with_fixed_value with
     | None -> None
-    | Some simple -> (
-      match
-        TE.get_canonical_simple_exn (DA.typing_env dacc) simple
-          ~min_name_mode:NM.normal ~name_mode_of_existing_simple:NM.normal
-      with
-      | exception Not_found -> None
-      | simple -> Some simple))
+    | Some simple ->
+      filter_and_choose_alias required_names
+        (find_all_aliases (DA.typing_env dacc) simple))
 
 let rebuild_switch ~arms ~condition_dbg ~scrutinee ~scrutinee_ty
     ~dacc_before_switch uacc ~after_rebuild =
@@ -223,7 +228,10 @@ let rebuild_switch ~arms ~condition_dbg ~scrutinee ~scrutinee_ty
     | No_arms | Not_mergeable -> None
     | Mergeable { cont; args } ->
       let num_args = List.length args in
-      let args = List.filter_map Alias_set.choose_opt args in
+      let required_names = UA.required_names uacc in
+      let args =
+        List.filter_map (filter_and_choose_alias required_names) args
+      in
       if List.compare_length_with args num_args = 0
       then Some (cont, args)
       else None
@@ -291,7 +299,10 @@ let rebuild_switch ~arms ~condition_dbg ~scrutinee ~scrutinee_ty
             UA.notify_removed ~operation:Removed_operations.branch uacc
           in
           let tagging_prim : P.t = Unary (Tag_immediate, scrutinee) in
-          match find_cse_simple dacc_before_switch tagging_prim with
+          match
+            find_cse_simple dacc_before_switch (UA.required_names uacc)
+              tagging_prim
+          with
           | None -> normal_case uacc
           | Some tagged_scrutinee ->
             let apply_cont =
@@ -311,7 +322,10 @@ let rebuild_switch ~arms ~condition_dbg ~scrutinee ~scrutinee_ty
             let not_scrutinee = Variable.create "not_scrutinee" in
             let not_scrutinee' = Simple.var not_scrutinee in
             let tagging_prim : P.t = Unary (Tag_immediate, scrutinee) in
-            match find_cse_simple dacc_before_switch tagging_prim with
+            match
+              find_cse_simple dacc_before_switch (UA.required_names uacc)
+                tagging_prim
+            with
             | None -> normal_case uacc
             | Some tagged_scrutinee ->
               let do_tagging =
@@ -398,11 +412,13 @@ let simplify_switch0 dacc switch ~down_to_up =
       DA.map_flow_acc dacc
         ~f:(Flow.Acc.add_used_in_current_handler (Simple.free_names scrutinee))
   in
+  let condition_dbg =
+    DE.add_inlined_debuginfo (DA.denv dacc) (Switch.condition_dbg switch)
+  in
   down_to_up dacc
     ~rebuild:
-      (rebuild_switch ~arms
-         ~condition_dbg:(Switch.condition_dbg switch)
-         ~scrutinee ~scrutinee_ty ~dacc_before_switch)
+      (rebuild_switch ~arms ~condition_dbg ~scrutinee ~scrutinee_ty
+         ~dacc_before_switch)
 
 let simplify_switch ~simplify_let ~simplify_function_body dacc switch
     ~down_to_up =
