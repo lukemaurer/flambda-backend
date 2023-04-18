@@ -44,9 +44,10 @@ let rebuild_let (defs : def list) (body : Flambda.t) =
    innermost definition. If this isn't possible, instead just return the
    variable and the whole definition list. *)
 let rec split_defs defs var =
+  let module W = Flambda.With_free_variables in
   match defs with
   | Immutable (var', named) :: defs' when Variable.equal var var' -> begin
-      match Flambda.With_free_variables.contents named with
+      match W.contents named with
       | Expr expr -> defs', expr
       | _ -> defs, Flambda.Var var
     end
@@ -54,7 +55,7 @@ let rec split_defs defs var =
     Misc.fatal_errorf "Expected binding for %a@ but found %a"
       Variable.print var Variable.print var'
   | Tail :: defs' ->
-    (* Rewrite [let x = M in tail x] as simply M *)
+    (* Rewrite [let x = M in tail x] as simply [M] *)
     split_defs defs' var
   | (Mutable _ | Region) :: _ | [] ->
     Misc.fatal_errorf "Expected binding for %a"
@@ -74,15 +75,6 @@ let defs_close_region defs =
         more_tails_than_regions defs tails regions
   in
   more_tails_than_regions defs 0 0
-
-(* Find the expression bound to the last definition, *)
-let rec find_tail_binding defs var =
-  match defs with
-  | Tail :: defs -> find_tail_binding defs var
-  | Immutable (var', named) :: _ when Variable.equal var var' ->
-      named
-  | (Immutable _ | Mutable _ | Region) :: _ | [] ->
-      Misc.fatal_errorf "expected %a in bindings" Variable.print var
 
 let rec tail_expr_in_expr0 (expr : Flambda.t) ~depth =
   match expr with
@@ -130,6 +122,11 @@ and tail_expr_in_cases0 : 'a. ('a * Flambda.t) list -> depth:int -> bool =
 
 let tail_expr_in_expr expr = tail_expr_in_expr0 expr ~depth:0
 
+(* Whether [let x = region ... M in N] can be rewritten as
+   [region ... let x = M in tail N]. Only true if [M] has no [tail]
+   expressions (besides those in lambdas). *)
+let liftable_region_body expr = not (tail_expr_in_expr expr)
+
 let rec extract_let_expr (acc:def list) dest let_expr =
   let module W = Flambda.With_free_variables in
   let acc =
@@ -163,23 +160,10 @@ and extract_region acc dest body =
      we're going to need [inner_dest] as an intermediary. *)
   let inner_dest = Variable.rename dest in
   let acc_expr = extract [] inner_dest (W.of_expr body) in
-  let cannot_lift =
-    match find_tail_binding acc_expr inner_dest |> W.contents with
-    | Expr expr -> tail_expr_in_expr expr
-    | _ -> false
-  in
-  if cannot_lift then
-    (* There's a tail expression that we can't lift out, so we can't do anything
-       but bundle everything back up in a region. *)
-    let expr =
-      Flambda.Region (rebuild_expr acc_expr inner_dest)
-      |> W.of_expr
-    in
-    Immutable(dest, W.expr expr) :: acc
-  else
-    (* If possible, recover the expression that gets assigned to [inner_dest] so
-       we can directly assign [dest] to it instead *)
-    let acc_expr, body = split_defs acc_expr inner_dest in
+  (* If possible, recover the expression that gets assigned to [inner_dest] so
+     we can directly assign [dest] to it instead *)
+  match split_defs acc_expr inner_dest with
+  | acc_expr, body when liftable_region_body body ->
     (* The accumulator must remain balanced between [Region] and [Tail], since
        it defines a scope into which [extract_let_expr] will move arbitrary
        computations - if there is a [Region] but no [Tail], this means we're
@@ -193,6 +177,11 @@ and extract_region acc dest body =
         acc_expr;
         [ Region ];
         acc ]
+  | _ ->
+    (* We can't lift it, so we just have to bundle everything back up in a
+       region. *)
+    let expr = Flambda.Region (rebuild_expr acc_expr inner_dest) in
+    Immutable(dest, W.expr (W.of_expr expr)) :: acc
 
 and extract_tail_call acc dest (apply : Flambda.apply) =
   let module W = Flambda.With_free_variables in
@@ -239,18 +228,17 @@ and extract acc dest expr =
     Immutable (dest, W.expr expr) :: acc
 
 let rec lift_lets_expr (expr:Flambda.t) ~toplevel : Flambda.t =
-  let module W = Flambda.With_free_variables in
   match expr with
   | Let let_expr ->
     let dest = Variable.create Internal_variable_names.lifted_let in
     let defs = extract_let_expr [] dest let_expr in
-    let defs = List.map (lift_lets_def ~toplevel) defs in
-    rebuild_expr defs dest
+    let rev_defs = List.rev_map (lift_lets_def ~toplevel) defs in
+    rebuild_expr (List.rev rev_defs) dest
   | Let_mutable let_mut ->
     let dest = Variable.create Internal_variable_names.lifted_let in
     let defs = extract_let_mutable [] dest let_mut in
-    let defs = List.map (lift_lets_def ~toplevel) defs in
-    rebuild_expr defs dest
+    let rev_defs = List.rev_map (lift_lets_def ~toplevel) defs in
+    rebuild_expr (List.rev rev_defs) dest
   | e ->
     Flambda_iterators.map_subexpressions
       (lift_lets_expr ~toplevel)
