@@ -2443,6 +2443,7 @@ let has_local_allocs e =
 
 let rec map_region_tail f = function
   | Ctail e -> Ctail (f e)
+  | Cregion e -> Cregion (map_region_tail (map_region_tail f) e)
   | e -> map_shallow_tail (map_region_tail f) e
 
 let remove_region_tail e =
