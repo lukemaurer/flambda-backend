@@ -79,7 +79,8 @@ let defs_close_region defs =
 let rec tail_expr_in_expr0 (expr : Flambda.t) ~depth =
   match expr with
   | Tail expr -> depth = 0 || tail_expr_in_expr0 expr ~depth:(depth - 1)
-  | Apply { reg_close = Rc_close_at_apply; _ } -> depth = 0
+  | Apply { reg_close = Rc_close_at_apply; _ }
+  | Send { reg_close = Rc_close_at_apply; _ } -> depth = 0
   | Region expr ->
       tail_expr_in_expr0 expr ~depth:(depth + 1)
   | Let { body; _ }
@@ -141,6 +142,10 @@ let rec extract_let_expr (acc:def list) dest let_expr =
         defining_expr = Expr (Apply ({ reg_close = Rc_close_at_apply; _ }
                                      as apply)) } ->
         extract_tail_call acc v1 apply
+    | { var = v1;
+        defining_expr = Expr (Send ({ reg_close = Rc_close_at_apply; _ }
+                                    as send)) } ->
+        extract_tail_send acc v1 send
     | { var = v; _ } ->
         Immutable(v, W.of_defining_expr_of_let let_expr) :: acc
   in
@@ -197,6 +202,12 @@ and extract_tail_call acc dest (apply : Flambda.apply) =
   in
   Immutable (dest, W.expr (W.of_expr (Apply apply))) :: Tail :: acc
 
+and extract_tail_send acc dest (send : Flambda.send) =
+  let module W = Flambda.With_free_variables in
+  (* Same as [extract_tail_call] but with sends *)
+  let send = { send with reg_close = Rc_normal } in
+  Immutable (dest, W.expr (W.of_expr (Send send))) :: Tail :: acc
+
 and extract acc dest expr =
   let module W = Flambda.With_free_variables in
   match (W.contents expr : Flambda.t) with
@@ -224,6 +235,8 @@ and extract acc dest expr =
     extract (Tail :: acc) dest (W.of_expr expr)
   | Apply ({ reg_close = Rc_close_at_apply; _ } as apply) ->
     extract_tail_call acc dest apply
+  | Send ({ reg_close = Rc_close_at_apply; _ } as send) ->
+    extract_tail_send acc dest send
   | _ ->
     Immutable (dest, W.expr expr) :: acc
 
