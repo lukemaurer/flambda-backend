@@ -107,6 +107,8 @@ type t =
   | Missing_mli                             (* 70 *)
   | Unused_tmc_attribute                    (* 71 *)
   | Tmc_breaks_tailcall                     (* 72 *)
+  | Probe_name_too_long of string           (* 190 *)
+  | Unchecked_property_attribute of string  (* 199 *)
 ;;
 
 (* If you remove a warning, leave a hole in the numbering.  NEVER change
@@ -189,9 +191,11 @@ let number = function
   | Missing_mli -> 70
   | Unused_tmc_attribute -> 71
   | Tmc_breaks_tailcall -> 72
+  | Probe_name_too_long _ -> 190
+  | Unchecked_property_attribute _ -> 199
 ;;
 
-let last_warning_number = 72
+let last_warning_number = 199
 ;;
 
 type description =
@@ -446,6 +450,13 @@ let descriptions = [
     names = ["tmc-breaks-tailcall"];
     description = "A tail call is turned into a non-tail call \
                    by the @tail_mod_cons transformation." };
+  { number = 190;
+    names = ["probe-name-too-long"];
+    description = "Probe name must be at most 100 characters long." };
+  { number = 199;
+    names = ["unchecked-property-attribute"];
+    description = "A property of a function that was \
+                   optimized away cannot be checked." };
 ]
 ;;
 
@@ -1045,6 +1056,16 @@ let message = function
        Please either mark the called function with the [@tail_mod_cons]\n\
        attribute, or mark this call with the [@tailcall false] attribute\n\
        to make its non-tailness explicit."
+  | Probe_name_too_long name ->
+      Printf.sprintf
+        "This probe name is too long: `%s'. \
+         Probe names must be at most 100 characters long." name
+  | Unchecked_property_attribute property ->
+      Printf.sprintf "the %S attribute cannot be checked.\n\
+      The function it is attached to was optimized away. \n\
+      You can try to mark this function as [@inline never] \n\
+      or move the attribute to the relevant callers of this function."
+      property
 ;;
 
 let nerrors = ref 0;;

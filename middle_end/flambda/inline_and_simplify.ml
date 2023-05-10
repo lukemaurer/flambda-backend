@@ -939,7 +939,7 @@ and simplify_over_application env r ~args ~args_approxs ~function_decls
   in
   let expr =
     match reg_close with
-    | Lambda.Rc_close_at_apply -> Flambda.Tail expr
+    | Lambda.Rc_close_at_apply -> Flambda.Exclave expr
     | Lambda.Rc_normal | Lambda.Rc_nontail-> expr
   in
   simplify (E.set_never_inline env) r expr
@@ -1460,7 +1460,7 @@ and simplify env r (tree : Flambda.t) : Flambda.t * R.t =
      let use_inner_region = R.may_use_region r in
      let r = R.leave_region r in
      if use_inner_region then Region body, r else body, r
-  | Tail body ->
+  | Exclave body ->
      let r = R.leave_region r in
      let body, r = simplify env r body in
      let r = R.enter_region r in
@@ -1471,7 +1471,7 @@ and simplify env r (tree : Flambda.t) : Flambda.t * R.t =
         pass could both remove the region and strip the [Tail]. In that case, we
         could restore the old region's state here. *)
      let r = R.set_region_used r in
-     Tail body, r
+     Exclave body, r
   | Proved_unreachable -> tree, ret r A.value_bottom
 
 and simplify_list env r l =

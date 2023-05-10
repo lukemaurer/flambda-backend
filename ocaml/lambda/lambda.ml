@@ -434,7 +434,7 @@ type local_attribute =
   | Default_local (* [@local maybe] or no [@local] attribute *)
 
 type property =
-  | Noalloc
+  | Zero_alloc
 
 type poll_attribute =
   | Error_poll (* [@poll error] *)
@@ -442,8 +442,12 @@ type poll_attribute =
 
 type check_attribute =
   | Default_check
-  | Assert of property
-  | Assume of property
+  | Ignore_assert_all of property
+  | Check of { property: property;
+               strict: bool;
+               assume: bool;
+               loc: Location.t;
+             }
 
 type loop_attribute =
   | Always_loop (* [@loop] or [@loop always] *)
@@ -508,6 +512,7 @@ type lambda =
   | Levent of lambda * lambda_event
   | Lifused of Ident.t * lambda
   | Lregion of lambda * layout
+  | Lexclave of lambda
 
 and lfunction =
   { kind: function_kind;
@@ -521,9 +526,7 @@ and lfunction =
 
 and lambda_while =
   { wh_cond : lambda;
-    wh_cond_region : bool;
     wh_body : lambda;
-    wh_body_region : bool
   }
 
 and lambda_for =
@@ -532,7 +535,6 @@ and lambda_for =
     for_to : lambda;
     for_dir : direction_flag;
     for_body : lambda;
-    for_region : bool;
   }
 
 and lambda_apply =
@@ -721,6 +723,7 @@ let make_key e =
         Lsend (m,tr_rec env e1,tr_rec env e2,tr_recs env es,pos,mo,Loc_unknown,layout)
     | Lifused (id,e) -> Lifused (id,tr_rec env e)
     | Lregion (e,layout) -> Lregion (tr_rec env e,layout)
+    | Lexclave e -> Lexclave (tr_rec env e)
     | Lletrec _|Lfunction _
     | Lfor _ | Lwhile _
 (* Beware: (PR#6412) the event argument to Levent
@@ -821,6 +824,8 @@ let shallow_iter ~tail ~non_tail:f = function
       tail e
   | Lregion (e, _) ->
       f e
+  | Lexclave e ->
+      tail e
 
 let iter_head_constructor f l =
   shallow_iter ~tail:f ~non_tail:f l
@@ -902,6 +907,8 @@ let rec free_variables = function
       (* Shouldn't v be considered a free variable ? *)
       free_variables e
   | Lregion (e, _) ->
+      free_variables e
+  | Lexclave e ->
       free_variables e
 
 and free_variables_list set exprs =
@@ -1062,8 +1069,8 @@ let subst update_env ?(freshen_bound_variables = false) s input_lam =
     | Lifthenelse(e1, e2, e3,kind) ->
         Lifthenelse(subst s l e1, subst s l e2, subst s l e3,kind)
     | Lsequence(e1, e2) -> Lsequence(subst s l e1, subst s l e2)
-    | Lwhile lw -> Lwhile {lw with wh_cond = subst s l lw.wh_cond;
-                                   wh_body = subst s l lw.wh_body}
+    | Lwhile lw -> Lwhile { wh_cond = subst s l lw.wh_cond;
+                            wh_body = subst s l lw.wh_body}
     | Lfor lf ->
         let for_id, l' = bind lf.for_id l in
         Lfor {lf with for_id;
@@ -1084,7 +1091,7 @@ let subst update_env ?(freshen_bound_variables = false) s input_lam =
           let rebind id id' new_env =
             match find_in_old id with
             | exception Not_found -> new_env
-            | vd -> Env.add_value id' vd new_env
+            | vd -> Env.add_value_lazy id' vd new_env
           in
           let update_free id new_env =
             match find_in_old id with
@@ -1108,6 +1115,8 @@ let subst update_env ?(freshen_bound_variables = false) s input_lam =
         Lifused (id, subst s l e)
     | Lregion (e, layout) ->
         Lregion (subst s l e, layout)
+    | Lexclave e ->
+        Lexclave (subst s l e)
   and subst_list s l li = List.map (subst s l) li
   and subst_decl s l (id, exp) = (id, subst s l exp)
   and subst_case s l (key, case) = (key, subst s l case)
@@ -1121,7 +1130,7 @@ let subst update_env ?(freshen_bound_variables = false) s input_lam =
 let rename idmap lam =
   let update_env oldid vd env =
     let newid = Ident.Map.find oldid idmap in
-    Env.add_value newid vd env
+    Env.add_value_lazy newid vd env
   in
   let s = Ident.Map.map (fun new_id -> Lvar new_id) idmap in
   subst update_env s lam
@@ -1191,8 +1200,8 @@ let shallow_map ~tail ~non_tail:f = function
   | Lsequence (e1, e2) ->
       Lsequence (f e1, tail e2)
   | Lwhile lw ->
-      Lwhile { lw with wh_cond = f lw.wh_cond;
-                       wh_body = f lw.wh_body }
+      Lwhile { wh_cond = f lw.wh_cond;
+               wh_body = f lw.wh_body }
   | Lfor lf ->
       Lfor { lf with for_from = f lf.for_from;
                      for_to = f lf.for_to;
@@ -1207,6 +1216,8 @@ let shallow_map ~tail ~non_tail:f = function
       Lifused (v, tail e)
   | Lregion (e, layout) ->
       Lregion (f e, layout)
+  | Lexclave e ->
+      Lexclave (tail e)
 
 let map f =
   let rec g lam = f (shallow_map ~tail:g ~non_tail:g lam) in
@@ -1512,4 +1523,5 @@ let rec compute_expr_layout kinds lam =
   | Lwhile _ | Lfor _ | Lassign _ -> layout_unit
   | Lifused _ ->
       assert false
+  | Lexclave e -> compute_expr_layout kinds e
 
