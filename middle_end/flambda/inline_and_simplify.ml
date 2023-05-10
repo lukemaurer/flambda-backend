@@ -1466,10 +1466,10 @@ and simplify env r (tree : Flambda.t) : Flambda.t * R.t =
      let r = R.enter_region r in
      (* Mark the region as used, not necessarily because it's _actually_ being
         used but because now we won't be able to remove it (as we would also
-        need to remove the [Tail] from this expression and it will be too late).
-        Alternatively, if we could mark the region for deletion, a subsequent
-        pass could both remove the region and strip the [Tail]. In that case, we
-        could restore the old region's state here. *)
+        need to remove the [Exclave] from this expression and it will be too
+        late). Alternatively, if we could mark the region for deletion, a
+        subsequent pass could both remove the region and strip the [Exclave]. In
+        that case, we could restore the old region's state here. *)
      let r = R.set_region_used r in
      Exclave body, r
   | Proved_unreachable -> tree, ret r A.value_bottom

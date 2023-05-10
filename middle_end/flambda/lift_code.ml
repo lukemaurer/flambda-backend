@@ -23,7 +23,7 @@ type def =
   | Immutable of Variable.t * Flambda.named Flambda.With_free_variables.t
   | Mutable of Mutable_variable.t * Variable.t * Lambda.layout
   | Region
-  | Tail
+  | Exclave
 
 let rebuild_let (defs : def list) (body : Flambda.t) =
   let module W = Flambda.With_free_variables in
@@ -35,8 +35,8 @@ let rebuild_let (defs : def list) (body : Flambda.t) =
         Flambda.Let_mutable {var; initial_value; contents_kind; body}
     | Region ->
         Flambda.Region body
-    | Tail ->
-        Flambda.Tail body)
+    | Exclave ->
+        Flambda.Exclave body)
     body defs
 
 (* Given something like [[x = M; y = N]], where we intend to produce [let y = N in
@@ -68,7 +68,7 @@ let split_defs defs var : def list * Flambda.expr =
   | Immutable (var', _) :: _ ->
     Misc.fatal_errorf "Expected binding for %a@ but found %a"
       Variable.print var Variable.print var'
-  | Tail :: _ ->
+  | Exclave :: _ ->
     defs, Var var
   | (Mutable _ | Region) :: _ | [] ->
     Misc.fatal_errorf "Expected binding for %a"
@@ -82,7 +82,7 @@ let region_delta defs =
   List.fold_left
     (fun delta def ->
        match def with
-       | Tail -> delta - 1
+       | Exclave -> delta - 1
        | Region -> delta + 1
        | Immutable _ | Mutable _ -> delta)
     0 defs
@@ -99,7 +99,7 @@ let check_defs defs =
 
 let rec tail_expr_in_expr0 (expr : Flambda.t) ~depth =
   match expr with
-  | Tail expr -> depth = 0 || tail_expr_in_expr0 expr ~depth:(depth - 1)
+  | Exclave expr -> depth = 0 || tail_expr_in_expr0 expr ~depth:(depth - 1)
   | Apply { reg_close = Rc_close_at_apply; _ }
   | Send { reg_close = Rc_close_at_apply; _ } -> depth = 0
   | Region expr ->
@@ -190,15 +190,15 @@ and extract_region acc dest body =
      we can directly assign [dest] to it instead *)
   match split_defs acc_expr inner_dest with
   | acc_expr, body when liftable_region_body body ->
-    (* The accumulator must remain balanced between [Region] and [Tail] (see
+    (* The accumulator must remain balanced between [Region] and [Exclave] (see
        [check_defs]), since it defines a scope into which [extract_let_expr]
-       will move arbitrary computations - if there is a [Region] but no [Tail],
-       this means we're moving those computations into a different region. It
-       may be that [acc_expr] already has a [Tail] (because we lifted it out of
-       [body]), but otherwise we need to add it. *)
+       will move arbitrary computations - if there is a [Region] but no
+       [Exclave], this means we're moving those computations into a different
+       region. It may be that [acc_expr] already has an [Exclave] (because we
+       lifted it out of [body]), but otherwise we need to add it. *)
     let need_tail = not (defs_close_region acc_expr) in
     List.concat
-      [ if need_tail then [ Tail ] else [];
+      [ if need_tail then [ Exclave ] else [];
         [ Immutable (dest, W.expr (W.of_expr body)) ];
         acc_expr;
         [ Region ];
@@ -211,16 +211,16 @@ and extract_region acc dest body =
 
 and extract_tail_call acc dest (apply : Flambda.apply) =
   let module W = Flambda.With_free_variables in
-  (* Rewrite a close-at-apply call as a normal call in a [Tail] so that we can
-     float the [Tail] *)
+  (* Rewrite a close-at-apply call as a normal call in an [Exclave] so that we
+     can float the [Exclave] *)
   let apply = { apply with reg_close = Rc_normal } in
-  Immutable (dest, W.expr (W.of_expr (Apply apply))) :: Tail :: acc
+  Immutable (dest, W.expr (W.of_expr (Apply apply))) :: Exclave :: acc
 
 and extract_tail_send acc dest (send : Flambda.send) =
   let module W = Flambda.With_free_variables in
   (* Same as [extract_tail_call] but with sends *)
   let send = { send with reg_close = Rc_normal } in
-  Immutable (dest, W.expr (W.of_expr (Send send))) :: Tail :: acc
+  Immutable (dest, W.expr (W.of_expr (Send send))) :: Exclave :: acc
 
 and extract acc dest expr =
   let module W = Flambda.With_free_variables in
@@ -232,22 +232,22 @@ and extract acc dest expr =
     extract_let_mutable acc dest let_mutable
   | Region expr ->
     extract_region acc dest expr
-  | Tail expr ->
-    (* One might worry about just adding [Tail] to the accumulator, since in
+  | Exclave expr ->
+    (* One might worry about just adding [Exclave] to the accumulator, since in
        general the accumulator defines a scope into which we're moving arbitrary
        expressions. In [extract_region], we're careful to make sure the
-       accumulator remains "balanced" between [Region] and [Tail] for this
-       reason. Here we can get away with unconditionally tossing [Tail] onto the
-       accumulator because one of the following must be true:
+       accumulator remains "balanced" between [Region] and [Exclave] for this
+       reason. Here we can get away with unconditionally tossing [Exclave] onto
+       the accumulator because one of the following must be true:
 
        1. We are in the tail of a [Region] being handled by [extract_region],
-          which will see that we've added this [Tail] and not add one of
+          which will see that we've added this [Exclave] and not add one of
           its own.
 
        2. We are in the tail of the entire expression (that is, the argument to
           [lift_lets_expr]), and thus [expr] is the very last expression we're
-          processing, so nothing else will be moved into this [Tail]. *)
-    extract (Tail :: acc) dest (W.of_expr expr)
+          processing, so nothing else will be moved into this [Exclave]. *)
+    extract (Exclave :: acc) dest (W.of_expr expr)
   | Apply ({ reg_close = Rc_close_at_apply; _ } as apply) ->
     extract_tail_call acc dest apply
   | Send ({ reg_close = Rc_close_at_apply; _ } as send) ->
@@ -297,7 +297,7 @@ and lift_lets_def def ~toplevel =
         named
     in
     Immutable(var, named)
-  | Region | Tail -> def
+  | Region | Exclave -> def
 
 and lift_lets_named _var (named:Flambda.named) ~toplevel : Flambda.named =
   match named with
