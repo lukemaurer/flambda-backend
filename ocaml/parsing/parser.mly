@@ -162,11 +162,6 @@ let local_extension loc =
   Exp.mk ~loc:Location.none
     (Pexp_extension(local_ext_loc loc, PStr []))
 
-let include_functor_ext_loc loc = mkloc "extension.include_functor" loc
-
-let include_functor_attr loc =
-  mk_attr ~loc:loc (include_functor_ext_loc loc) (PStr [])
-
 let mkexp_stack ~loc ~kwd_loc exp =
   ghexp ~loc (Pexp_apply(local_extension (make_loc kwd_loc), [Nolabel, exp]))
 
@@ -344,7 +339,7 @@ module Generic_array = struct
 end
 
 let ppat_iarray loc elts =
-  Extensions.Immutable_arrays.pat_of
+  Jane_syntax.Immutable_arrays.pat_of
     ~loc:(make_loc loc)
     (Iapat_immutable_array elts)
 
@@ -1579,7 +1574,10 @@ structure_item:
     | class_type_declarations
         { let (ext, l) = $1 in (Pstr_class_type l, ext) }
     | include_statement(module_expr)
-        { pstr_include $1 }
+        { $1 pstr_include
+             (fun ~loc incl ->
+                Jane_syntax.Include_functor.str_item_of ~loc
+                  (Ifstr_include_functor incl)) }
     )
     { $1 }
 ;
@@ -1655,26 +1653,31 @@ module_binding_body:
 
 (* Shared material between structures and signatures. *)
 
-include_and_functor_attr:
+include_maybe_functor:
   | INCLUDE %prec below_FUNCTOR
-      { [] }
+      { false }
   | INCLUDE FUNCTOR
-      { [include_functor_attr (make_loc $loc)] }
+      { true }
 ;
 
 (* An [include] statement can appear in a structure or in a signature,
    which is why this definition is parameterized. *)
 %inline include_statement(thing):
-  attrs0 = include_and_functor_attr
+  is_functor = include_maybe_functor
   ext = ext
   attrs1 = attributes
   thing = thing
   attrs2 = post_item_attributes
   {
-    let attrs = attrs0 @ attrs1 @ attrs2 in
+    let attrs = attrs1 @ attrs2 in
     let loc = make_loc $sloc in
     let docs = symbol_docs $sloc in
-    Incl.mk thing ~attrs ~loc ~docs, ext
+    let incl = Incl.mk thing ~attrs ~loc ~docs in
+    fun wrap jane_syntax_of ->
+      if is_functor then
+        jane_syntax_of ~loc:(make_loc $sloc) incl, ext
+      else
+        wrap (incl, ext)
   }
 ;
 
@@ -1828,7 +1831,10 @@ signature_item:
     | open_description
         { let (body, ext) = $1 in (Psig_open body, ext) }
     | include_statement(module_type)
-        { psig_include $1 }
+        { $1 psig_include
+             (fun ~loc incl ->
+                Jane_syntax.Include_functor.sig_item_of ~loc
+                  (Ifsig_include_functor incl)) }
     | class_descriptions
         { let (ext, l) = $1 in (Psig_class l, ext) }
     | class_type_declarations
@@ -2568,21 +2574,21 @@ simple_expr:
 
 comprehension_iterator:
   | EQUAL expr direction_flag expr
-      { Extensions.Comprehensions.Range { start = $2 ; stop = $4 ; direction = $3 } }
+      { Jane_syntax.Comprehensions.Range { start = $2 ; stop = $4 ; direction = $3 } }
   | IN expr
-      { Extensions.Comprehensions.In $2 }
+      { Jane_syntax.Comprehensions.In $2 }
 ;
 
 comprehension_clause_binding:
   | attributes pattern comprehension_iterator
-      { Extensions.Comprehensions.{ pattern = $2 ; iterator = $3 ; attributes = $1 } }
+      { Jane_syntax.Comprehensions.{ pattern = $2 ; iterator = $3 ; attributes = $1 } }
   (* We can't write [[e for local_ x = 1 to 10]], because the [local_] has to
      move to the RHS and there's nowhere for it to move to; besides, you never
      want that [int] to be [local_].  But we can parse [[e for local_ x in xs]].
      We have to have that as a separate rule here because it moves the [local_]
      over to the RHS of the binding, so we need everything to be visible. *)
   | attributes LOCAL pattern IN expr
-      { Extensions.Comprehensions.
+      { Jane_syntax.Comprehensions.
           { pattern    = $3
           ; iterator   = In (mkexp_stack ~loc:$sloc ~kwd_loc:($loc($2)) $5)
           ; attributes = $1
@@ -2592,27 +2598,27 @@ comprehension_clause_binding:
 
 comprehension_clause:
   | FOR separated_nonempty_llist(AND, comprehension_clause_binding)
-      { Extensions.Comprehensions.For $2 }
+      { Jane_syntax.Comprehensions.For $2 }
   | WHEN expr
-      { Extensions.Comprehensions.When $2 }
+      { Jane_syntax.Comprehensions.When $2 }
 
 %inline comprehension(lbracket, rbracket):
   lbracket expr nonempty_llist(comprehension_clause) rbracket
-    { Extensions.Comprehensions.{ body = $2; clauses = $3 } }
+    { Jane_syntax.Comprehensions.{ body = $2; clauses = $3 } }
 ;
 
 %inline comprehension_ext_expr:
   | comprehension(LBRACKET,RBRACKET)
-      { Extensions.Comprehensions.Cexp_list_comprehension  $1 }
+      { Jane_syntax.Comprehensions.Cexp_list_comprehension  $1 }
   | comprehension(LBRACKETBAR,BARRBRACKET)
-      { Extensions.Comprehensions.Cexp_array_comprehension (Mutable, $1) }
+      { Jane_syntax.Comprehensions.Cexp_array_comprehension (Mutable, $1) }
   | comprehension(LBRACKETCOLON,COLONRBRACKET)
-      { Extensions.Comprehensions.Cexp_array_comprehension (Immutable, $1) }
+      { Jane_syntax.Comprehensions.Cexp_array_comprehension (Immutable, $1) }
 ;
 
 %inline comprehension_expr:
   comprehension_ext_expr
-    { Extensions.Comprehensions.expr_of ~loc:(make_loc $sloc) $1 }
+    { Jane_syntax.Comprehensions.expr_of ~loc:(make_loc $sloc) $1 }
 ;
 
 %inline array_simple(ARR_OPEN, ARR_CLOSE, contents_semi_list):
@@ -2700,7 +2706,7 @@ comprehension_clause:
       { Generic_array.expression
           "[:" ":]"
           (fun elts ->
-             Extensions.Immutable_arrays.expr_of
+             Jane_syntax.Immutable_arrays.expr_of
                ~loc:(make_loc $sloc)
                (Iaexp_immutable_array elts))
           $1 }

@@ -411,7 +411,7 @@ let equal_inlined_attribute (x : inlined_attribute) (y : inlined_attribute) =
     | Hint_inlined | Unroll _ | Default_inlined), _ ->
     false
 
-type probe_desc = { name: string }
+type probe_desc = { name: string; enabled_at_init: bool; }
 type probe = probe_desc option
 
 type specialise_attribute =
@@ -650,7 +650,7 @@ let default_function_attribute = {
 }
 
 let default_stub_attribute =
-  { default_function_attribute with stub = true }
+  { default_function_attribute with stub = true; check = Ignore_assert_all Zero_alloc }
 
 (* Build sharing keys *)
 (*

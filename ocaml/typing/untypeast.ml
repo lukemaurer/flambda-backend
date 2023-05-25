@@ -198,7 +198,15 @@ let structure_item sub item =
              (fun (_id, _name, ct) -> sub.class_type_declaration sub ct)
              list)
     | Tstr_include incl ->
-        Pstr_include (sub.include_declaration sub incl)
+        let pincl = sub.include_declaration sub incl in
+        begin match incl.incl_kind with
+        | Tincl_structure ->
+            Pstr_include pincl
+        | Tincl_functor _ | Tincl_gen_functor _ ->
+            Jane_syntax.Include_functor.str_item_of
+              ~loc
+              (Jane_syntax.Include_functor.Ifstr_include_functor pincl)
+        end
     | Tstr_attribute x ->
         Pstr_attribute x
   in
@@ -361,7 +369,7 @@ let pattern : type k . _ -> k T.general_pattern -> _ = fun sub pat ->
         let pats = List.map (sub.pat sub) list in
         match am with
         | Mutable   -> Ppat_array pats
-        | Immutable -> Extensions.Immutable_arrays.pat_of
+        | Immutable -> Jane_syntax.Immutable_arrays.pat_of
                          ~loc
                          (Iapat_immutable_array pats)
       end
@@ -404,7 +412,7 @@ let value_binding sub vb =
     (sub.expr sub vb.vb_expr)
 
 let comprehension sub comp_type comp =
-  let open Extensions.Comprehensions in
+  let open Jane_syntax.Comprehensions in
   let iterator = function
     | Texp_comp_range { ident = _; pattern; start ; stop ; direction } ->
         pattern,
@@ -429,7 +437,7 @@ let comprehension sub comp_type comp =
     { body    = sub.expr sub comp_body
     ; clauses = List.map clause comp_clauses }
   in
-  Extensions.Comprehensions.expr_of (comp_type (comprehension comp))
+  Jane_syntax.Comprehensions.expr_of (comp_type (comprehension comp))
 
 let expression sub exp =
   let loc = sub.location sub exp.exp_loc in
@@ -501,7 +509,7 @@ let expression sub exp =
         | Mutable ->
             Pexp_array plist
         | Immutable ->
-            Extensions.Immutable_arrays.expr_of
+            Jane_syntax.Immutable_arrays.expr_of
               ~loc (Iaexp_immutable_array plist)
       end
     | Texp_list_comprehension comp ->
@@ -664,7 +672,15 @@ let signature_item sub item =
     | Tsig_open od ->
         Psig_open (sub.open_description sub od)
     | Tsig_include incl ->
-        Psig_include (sub.include_description sub incl)
+        let pincl = sub.include_description sub incl in
+        begin match incl.incl_kind with
+        | Tincl_structure ->
+            Psig_include pincl
+        | Tincl_functor _ | Tincl_gen_functor _ ->
+            Jane_syntax.Include_functor.sig_item_of
+              ~loc
+              (Jane_syntax.Include_functor.Ifsig_include_functor pincl)
+        end
     | Tsig_class list ->
         Psig_class (List.map (sub.class_description sub) list)
     | Tsig_class_type list ->
