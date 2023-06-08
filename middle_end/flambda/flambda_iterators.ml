@@ -721,14 +721,15 @@ let map_sets_of_closures_of_program (program : Flambda.program)
     program_body = loop program.program_body;
   }
 
-let map_exprs_at_toplevel_of_program (program : Flambda.program)
-    ~(f : Flambda.t -> Flambda.t) =
+let map_exprs_at_toplevel_of_program_while_being_aware_of_lambdas
+    (program : Flambda.program)
+    ~(f : Flambda.t -> under_lambda:bool -> Flambda.t) =
   let rec loop (program : Flambda.program_body) : Flambda.program_body =
     let map_constant_set_of_closures (set_of_closures:Flambda.set_of_closures) =
       let done_something = ref false in
       let funs =
         Variable.Map.map (fun (function_decl : Flambda.function_declaration) ->
-            let body = f function_decl.body in
+            let body = f function_decl.body ~under_lambda:true in
             if body == function_decl.body then
               function_decl
             else begin
@@ -789,7 +790,7 @@ let map_exprs_at_toplevel_of_program (program : Flambda.program)
       let done_something = ref false in
       let fields =
         List.map (fun field ->
-            let new_field = f field in
+            let new_field = f field ~under_lambda:false in
             if not (new_field == field) then begin
               done_something := true
             end;
@@ -802,7 +803,7 @@ let map_exprs_at_toplevel_of_program (program : Flambda.program)
       else
         Initialize_symbol (symbol, tag, fields, new_program')
     | Effect (expr, program') ->
-      let new_expr = f expr in
+      let new_expr = f expr ~under_lambda:false in
       let new_program' = loop program' in
       if new_expr == expr && new_program' == program' then
         program
@@ -813,6 +814,10 @@ let map_exprs_at_toplevel_of_program (program : Flambda.program)
   { program with
     program_body = loop program.program_body;
   }
+
+let map_exprs_at_toplevel_of_program program ~f =
+  map_exprs_at_toplevel_of_program_while_being_aware_of_lambdas
+      ~f:(fun expr ~under_lambda:_ -> f expr) program
 
 let map_named_of_program (program : Flambda.program)
       ~(f : Variable.t -> Flambda.named -> Flambda.named) : Flambda.program =

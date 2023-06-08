@@ -304,12 +304,25 @@ module Result : sig
       innermost region. *)
   val leave_region : t -> t
 
+  type exclave
+
+  (** Enter an exclave.  A subsequent call to [set_region_used] will now affect
+      the outer region.  Returns a value that must be passed to the
+      corresponding [leave_exclave]. *)
+  val enter_exclave : t -> exclave * t
+
+  (** Leave an exclave, effectively re-entering the outer region. *)
+  val leave_exclave : t -> exclave -> t
+
   (** Mark that local allocations may be made in
       the nearest enclosing region *)
   val set_region_used : t -> t
 
   (** Whether [set_region_used _] has been called *)
   val may_use_region : t -> bool
+
+  (** Whether [enter_exclave _] has been called *)
+  val has_exclave : t -> bool
 
   (** Mark that we are moving up out of the scope of a static-catch block
       that catches the given static exception identifier.  This has the effect
