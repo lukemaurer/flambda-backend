@@ -275,7 +275,10 @@ clean::
 	rm -f *.cm* *.o *.obj *.a *.lib *.odoc
 	rm -rf flexdll
 
-include .depend
+# Allow .depend not to exist for compatibility with Dune builds, which don't
+# need the OCaml targets in this directory but do need camlheader*
+
+-include .depend
 
 STDLIB_NAMESPACE_MODULES = $(subst $(SPACE),|,$(STDLIB_PREFIXED_MODULES))
 

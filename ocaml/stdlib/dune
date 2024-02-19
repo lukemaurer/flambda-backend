@@ -43,7 +43,6 @@
  (deps
   Makefile
   StdlibModules
-  .depend
   ../Makefile.common
   ../Makefile.config_if_required
   ../Makefile.build_config
