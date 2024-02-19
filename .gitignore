@@ -64,3 +64,8 @@ _coverage/
 ocamlc
 ocamlopt
 .ocamldebug
+
+# Things restored by make restore-upstream
+.depend
+.depend.menhir
+/ocaml/boot/
