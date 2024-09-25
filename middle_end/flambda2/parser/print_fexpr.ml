@@ -616,10 +616,17 @@ let unop ppf u =
 let ternop ppf t a1 a2 a3 =
   match t with
   | Array_set (ak, set_kind) ->
-    Format.fprintf ppf "@[<2>%%array_set%a%a@ %a.(%a) %a@]"
+    let ia =
+      match set_kind with
+      | Values ia -> ia
+      | Immediates | Naked_floats | Naked_float32s | Naked_int32s | Naked_int64s
+      | Naked_nativeints | Naked_vec128s ->
+        Initialization (* Will be ignored anyway *)
+    in
+    Format.fprintf ppf "@[<2>%%array_set%a%a@ %a.(%a) %a %a@]"
       (array_kind ~space:Before) ak
       (array_set_kind ~space:Before)
-      set_kind simple a1 simple a2 simple a3
+      set_kind simple a1 simple a2 init_or_assign ia simple a3
   | Block_set (bk, ia) ->
     Format.fprintf ppf "@[<2>%%block_set%a@ %a.(%a)@ %a %a@]" block_access_kind
       bk simple a1 simple a2 init_or_assign ia simple a3
