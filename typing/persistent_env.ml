@@ -78,7 +78,7 @@ module Persistent_signature = struct
     | filename, Visible ->
       Some { filename; cmi = read_cmi_lazy filename; visibility = Visible}
     | _, Hidden
-    | exception Not_found -> None)
+    | exception Not_found -> Jkind.missing_cmis := (unit_name ^ ".cmi") :: !Jkind.missing_cmis; None)
 end
 
 type can_load_cmis =

@@ -568,3 +568,5 @@ module Debug_printers : sig
     val t : Format.formatter -> 'd Const.t -> unit
   end
 end
+
+val missing_cmis : string list ref

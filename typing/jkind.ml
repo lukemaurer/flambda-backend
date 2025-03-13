@@ -1239,6 +1239,8 @@ let printtyp_path = ref (fun _ _ -> assert false)
 
 let set_printtyp_path f = printtyp_path := f
 
+let missing_cmis : string list ref = ref []
+
 module Report_missing_cmi : sig
   (* used both in format_history and in Violation.report_general *)
   val report_missing_cmi : Format.formatter -> Path.t option -> unit
@@ -1272,8 +1274,16 @@ end = struct
 
   let report_missing_cmi ppf = function
     | Some p ->
-      fprintf ppf "@,@[No .cmi file found containing %a.%a@]" !printtyp_path p
-        missing_cmi_hint p
+      fprintf ppf
+        "@,\
+         @[No .cmi file found containing %a.%a@]@,\
+         @[.cmi files that have gone missing during this execution, most \
+         recent first: [%a]@]"
+        !printtyp_path p missing_cmi_hint p
+        (Format.pp_print_list
+           ~pp_sep:(fun ppf () -> Format.fprintf ppf ";@ ")
+           Format.pp_print_string)
+        !missing_cmis
     | None -> ()
 end
 
