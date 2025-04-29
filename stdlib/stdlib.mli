@@ -32,7 +32,7 @@
 
 (** {1 Exceptions} *)
 
-external raise : ('a : value_or_null). exn -> 'a @ portable unique = "%reraise"
+external raise : ('a : value_or_null). exn -> 'a @ portable unique = "%raise"
 (** Raise the given exception value *)
 
 external raise_notrace : ('a : value_or_null). exn -> 'a @ portable unique

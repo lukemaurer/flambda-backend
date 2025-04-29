@@ -31,7 +31,7 @@ let () =
 
 external raise :
   ('a : value_or_null). exn -> 'a @ portable unique @@ portable
-  = "%reraise"
+  = "%raise"
 external raise_notrace :
   ('a : value_or_null). exn -> 'a @ portable unique @@ portable
   = "%raise_notrace"
