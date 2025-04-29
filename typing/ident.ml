@@ -314,15 +314,20 @@ let rec find_same id = function
       else
         find_same id (if c < 0 then l else r)
 
-let rec find_name n = function
+let rec find_name_opt n = function
     Empty ->
-      raise Not_found
+      None
   | Node(l, k, r, _) ->
       let c = String.compare n (name k.ident) in
       if c = 0 then
-        k.ident, k.data
+        Some (k.ident, k.data)
       else
-        find_name n (if c < 0 then l else r)
+        find_name_opt n (if c < 0 then l else r)
+
+let find_name n t =
+  match find_name_opt n t with
+  | None -> raise Not_found
+  | Some pair -> pair
 
 let rec get_all = function
   | None -> []

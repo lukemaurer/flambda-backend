@@ -222,20 +222,16 @@ let register_import_as_opaque {imported_opaque_units; _} s =
   imported_opaque_units := CU.Name.Set.add s !imported_opaque_units
 
 let find_import_info_in_cache {imports; _} import =
-  match Hashtbl.find imports import with
-  | exception Not_found -> None
-  | Missing -> None
-  | Found imp -> Some imp
+  match Hashtbl.find_opt imports import with
+  | None -> None
+  | Some Missing -> None
+  | Some (Found imp) -> Some imp
 
 let find_name_info_in_cache {persistent_names; _} name =
-  match Hashtbl.find persistent_names name with
-  | exception Not_found -> None
-  | pn -> Some pn
+  Hashtbl.find_opt persistent_names name
 
 let find_info_in_cache {persistent_structures; _} name =
-  match Hashtbl.find persistent_structures name with
-  | exception Not_found -> None
-  | ps -> Some ps
+  Hashtbl.find_opt persistent_structures name
 
 let find_in_cache penv name =
   find_info_in_cache penv name |> Option.map (fun ps -> ps.ps_val)
@@ -410,10 +406,10 @@ let check_visibility ~allow_hidden imp =
 let find_import ~allow_hidden penv ~check modname =
   let {imports; _} = penv in
   if CU.Name.equal modname CU.Name.predef_exn then raise Not_found;
-  match Hashtbl.find imports modname with
-  | Found imp -> check_visibility ~allow_hidden imp; imp
-  | Missing -> raise Not_found
-  | exception Not_found ->
+  match Hashtbl.find_opt imports modname with
+  | Some (Found imp) -> check_visibility ~allow_hidden imp; imp
+  | Some Missing -> raise Not_found
+  | None ->
       match can_load_cmis penv with
       | Cannot_load_cmis _ -> raise Not_found
       | Can_load_cmis ->
@@ -429,13 +425,13 @@ let find_import ~allow_hidden penv ~check modname =
 
 let remember_global { globals; _ } global ~precision ~mentioned_by =
   let global_name = Global_module.to_name global in
-  match Hashtbl.find globals global_name with
-  | exception Not_found ->
+  match Hashtbl.find_opt globals global_name with
+  | None ->
       Hashtbl.add globals global_name
         { gn_global = (global, precision);
           gn_mentioned_by = mentioned_by;
         }
-  | { gn_global = old_global;
+  | Some { gn_global = old_global;
       gn_mentioned_by = first_mentioned_by } ->
       let new_global = global, precision in
       match
@@ -553,10 +549,10 @@ let rec global_of_global_name penv ~check name ~allow_excess_args =
     in
     pn.pn_global
   in
-  match Hashtbl.find penv.globals name with
-  | { gn_global = (global, Exact); _ } -> global
-  | { gn_global = (_, Approximate); _ } -> load ()
-  | exception Not_found -> load ()
+  match Hashtbl.find_opt penv.globals name with
+  | Some { gn_global = (global, Exact); _ } -> global
+  | Some { gn_global = (_, Approximate); _ } -> load ()
+  | None -> load ()
 
 and compute_global penv modname ~params ~check ~allow_excess_args =
   let arg_global_by_param_name =
@@ -734,9 +730,9 @@ and acknowledge_new_pers_name penv check global_name global import =
 
 and find_pers_name ~allow_hidden penv ~check name ~allow_excess_args =
   let {persistent_names; _} = penv in
-  match Hashtbl.find persistent_names name with
-  | pn -> pn
-  | exception Not_found ->
+  match Hashtbl.find_opt persistent_names name with
+  | Some pn -> pn
+  | None ->
       let unit_name = CU.Name.of_head_of_global_name name in
       let import = find_import ~allow_hidden penv ~check unit_name in
       acknowledge_pers_name penv check name import ~allow_excess_args
@@ -908,9 +904,9 @@ let read_pers_struct penv check modname cmi =
 let find_pers_struct
     ~allow_hidden penv val_of_pers_sig ~check name ~allow_excess_args =
   let {persistent_structures; _} = penv in
-  match Hashtbl.find persistent_structures name with
-  | ps -> check_visibility ~allow_hidden ps.ps_name_info.pn_import; ps
-  | exception Not_found ->
+  match Hashtbl.find_opt persistent_structures name with
+  | Some ps -> check_visibility ~allow_hidden ps.ps_name_info.pn_import; ps
+  | None ->
       let pers_name =
         find_pers_name ~allow_hidden penv ~check name ~allow_excess_args
       in

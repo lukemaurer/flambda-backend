@@ -234,8 +234,9 @@ let attrs s x =
   | No_action -> x
 
 let rec module_path s path =
-  try Path.Map.find path s.modules
-  with Not_found ->
+  match Path.Map.find_opt path s.modules
+  with Some a -> a
+     | None ->
     match path with
     | Pident _ -> path
     | Pdot(p, n) ->
@@ -246,11 +247,11 @@ let rec module_path s path =
        fatal_error "Subst.module_path"
 
 let modtype_path s path =
-      match Path.Map.find path s.modtypes with
-      | Mty_ident p -> p
-      | Mty_alias _ | Mty_signature _ | Mty_functor _| Mty_strengthen _ ->
+      match Path.Map.find_opt path s.modtypes with
+      | Some (Mty_ident p) -> p
+      | Some (Mty_alias _ | Mty_signature _ | Mty_functor _| Mty_strengthen _) ->
          fatal_error "Subst.modtype_path"
-      | exception Not_found ->
+      | None ->
          match path with
          | Pdot(p, n) ->
             Pdot(module_path s p, n)
@@ -266,10 +267,10 @@ let value_path s path =
   | Papply _ | Pextra_ty _ -> fatal_error "Subst.value_path"
 
 let rec type_path s path =
-  match Path.Map.find path s.types with
-  | Path p -> p
-  | Type_function _ -> assert false
-  | exception Not_found ->
+  match Path.Map.find_opt path s.types with
+  | Some (Path p) -> p
+  | Some (Type_function _) -> assert false
+  | None ->
      match path with
      | Pident _ -> path
      | Pdot(p, n) ->
@@ -283,10 +284,10 @@ let rec type_path s path =
          | Pext_ty -> Pextra_ty (value_path s p, extra)
 
 let to_subst_by_type_function s p =
-  match Path.Map.find p s.types with
-  | Path _ -> false
-  | Type_function _ -> true
-  | exception Not_found -> false
+  match Path.Map.find_opt p s.types with
+  | Some (Path _) -> false
+  | Some (Type_function _) -> true
+  | None -> false
 
 (* Special type ids for saved signatures *)
 
@@ -435,10 +436,10 @@ let rec typexp copy_scope s ty =
       else match desc with
       | Tconstr (p, args, _abbrev) ->
          let args = List.map (typexp copy_scope s) args in
-         begin match Path.Map.find p s.types with
-         | exception Not_found -> Tconstr(type_path s p, args, ref Mnil)
-         | Path _ -> Tconstr(type_path s p, args, ref Mnil)
-         | Type_function { params; body } ->
+         begin match Path.Map.find_opt p s.types with
+         | None -> Tconstr(type_path s p, args, ref Mnil)
+         | Some (Path _) -> Tconstr(type_path s p, args, ref Mnil)
+         | Some (Type_function { params; body }) ->
             Tlink (apply_type_function params args body)
          end
       | Tpackage(p, fl) ->
@@ -889,9 +890,9 @@ and subst_lazy_module_decl scoping s md =
 
 and subst_lazy_modtype scoping s = function
   | Mty_ident p ->
-      begin match Path.Map.find p s.modtypes with
-       | mty -> lazy_modtype mty
-       | exception Not_found ->
+      begin match Path.Map.find_opt p s.modtypes with
+       | Some mty -> lazy_modtype mty
+       | None ->
           begin match p with
           | Pident _ -> Mty_ident p
           | Pdot(p, n) ->

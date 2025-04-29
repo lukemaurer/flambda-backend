@@ -469,14 +469,14 @@ module IdTbl =
     let find_same_and_locks id tbl = find_same_and_locks id tbl []
 
     let rec find_name_and_locks wrap ~mark name tbl macc : _ Result.t =
-      try
-        let (id, desc) = Ident.find_name name tbl.current in
-        Ok (Pident id, macc, desc)
-      with Not_found ->
+      match Ident.find_name_opt name tbl.current with
+      | Some (id, desc) -> Ok (Pident id, macc, desc)
+      | None ->
         begin match tbl.layer with
         | Open {using; root; next; components; locks} ->
-            begin try
-              let descr = wrap (NameMap.find name components) in
+            begin match NameMap.find_opt name components with
+            | Some found ->
+              let descr = wrap found in
               let res = Pdot (root, name), (locks @ macc), descr in
               if mark then begin match using with
               | None -> ()
@@ -488,7 +488,7 @@ module IdTbl =
                 end
               end;
               Ok res
-            with Not_found ->
+            | None ->
               find_name_and_locks wrap ~mark name next macc
             end
         | Map {f; next} ->
