@@ -74,26 +74,60 @@ let[@tail_mod_cons] rec rec_map f = function
 [%%expect{|
 (letrec
   (rec_map
-     (function {nlocal = 0} f param tail_mod_cons
+     (function {nlocal = 0} f
+       param[value<
+              (consts (0))
+               (non_consts ([0: value<(consts ()) (non_consts ([0: *, *]))>]))>]
+       tail_mod_cons
+       : (consts (0))
+          (non_consts ([0: value<(consts ()) (non_consts ([0: *, *]))>]))
        (if param
          (let (*match* =a? (field_imm 0 param))
-           (makeblock 0 (value<(consts ()) (non_consts ([0: *, *]))>)
+           (makeblock 0 (value<
+                          (consts ())
+                           (non_consts ([0: *,
+                                         value<
+                                          (consts (0)) (non_consts ([0: *]))>]))>)
              (let
                (block =
-                  (makemutable 0 (*,*) (apply f (field_imm 0 *match*)) 24029))
+                  (makemutable 0 (*,value<
+                                     (consts (0))
+                                      (non_consts ([0:
+                                                    value<
+                                                     (consts ())
+                                                      (non_consts ([0: *, *]))>]))>)
+                    (apply f (field_imm 0 *match*)) 24029))
                (seq (apply rec_map_dps block 1 f (field_imm 1 *match*))
                  block))))
          0))
     rec_map_dps
-      (function {nlocal = 0} dst offset[value<int>] f param tail_mod_cons
+      (function {nlocal = 0} dst offset[value<int>] f
+        param[value<
+               (consts (0))
+                (non_consts ([0: value<(consts ()) (non_consts ([0: *, *]))>]))>]
+        tail_mod_cons
+        : (consts (0))
+           (non_consts ([0: value<(consts ()) (non_consts ([0: *, *]))>]))
         (if param
           (let
             (*match* =a? (field_imm 0 param)
              block1_arg0 =? (apply f (field_imm 0 *match*))
-             block = (makemutable 0 (*,*) block1_arg0 24029))
+             block =
+               (makemutable 0 (*,value<
+                                  (consts (0))
+                                   (non_consts ([0:
+                                                 value<
+                                                  (consts ())
+                                                   (non_consts ([0: *, *]))>]))>)
+                 block1_arg0 24029))
             (seq
               (setfield_ptr(heap-init)_computed dst offset
-                (makeblock 0 (value<(consts ()) (non_consts ([0: *, *]))>)
+                (makeblock 0 (value<
+                               (consts ())
+                                (non_consts ([0: *,
+                                              value<
+                                               (consts (0))
+                                                (non_consts ([0: *]))>]))>)
                   block))
               (apply rec_map_dps block 1 f (field_imm 1 *match*) tailcall)))
           (setfield_ptr(heap-init)_computed dst offset 0))))
@@ -118,21 +152,27 @@ let[@tail_mod_cons] rec trip = function
                              value<(consts (0)) (non_consts ([0: ?, *]))>]))>]
        tail_mod_cons
        : (consts (0))
-          (non_consts ([0: ?, value<(consts (0)) (non_consts ([0: ?, *]))>]))
+          (non_consts ([0:
+                        value<(consts ()) (non_consts ([0: ?, value<int>]))>,
+                        value<(consts (0)) (non_consts ([0: *, *]))>]))
        (if param
          (let (x =a? (field_imm 0 param))
            (makeblock 0 (value<(consts ()) (non_consts ([0: ?, value<int>]))>,
              value<
               (consts (0))
-               (non_consts ([0: ?,
-                             value<(consts (0)) (non_consts ([0: ?, *]))>]))>)
+               (non_consts ([0:
+                             value<
+                              (consts ()) (non_consts ([0: ?, value<int>]))>,
+                             value<(consts (0)) (non_consts ([0: *, *]))>]))>)
              (makeblock 0 (?,value<int>) x 0)
              (makeblock 0 (value<
                             (consts ()) (non_consts ([0: ?, value<int>]))>,
                value<
                 (consts (0))
-                 (non_consts ([0: ?,
-                               value<(consts (0)) (non_consts ([0: ?, *]))>]))>)
+                 (non_consts ([0:
+                               value<
+                                (consts ()) (non_consts ([0: ?, value<int>]))>,
+                               value<(consts (0)) (non_consts ([0: *, *]))>]))>)
                (makeblock 0 (?,value<int>) x 1)
                (let
                  (block =
@@ -141,9 +181,12 @@ let[@tail_mod_cons] rec trip = function
                                       (non_consts ([0: ?, value<int>]))>,
                       value<
                        (consts (0))
-                        (non_consts ([0: ?,
+                        (non_consts ([0:
                                       value<
-                                       (consts (0)) (non_consts ([0: ?, *]))>]))>)
+                                       (consts ())
+                                        (non_consts ([0: ?, value<int>]))>,
+                                      value<
+                                       (consts (0)) (non_consts ([0: *, *]))>]))>)
                       (makeblock 0 (?,value<int>) x 2) 24029))
                  (seq (apply trip_dps block 1 (field_imm 1 param)) block)))))
          0))
@@ -155,7 +198,9 @@ let[@tail_mod_cons] rec trip = function
                               value<(consts (0)) (non_consts ([0: ?, *]))>]))>]
         tail_mod_cons
         : (consts (0))
-           (non_consts ([0: ?, value<(consts (0)) (non_consts ([0: ?, *]))>]))
+           (non_consts ([0:
+                         value<(consts ()) (non_consts ([0: ?, value<int>]))>,
+                         value<(consts (0)) (non_consts ([0: *, *]))>]))
         (if param
           (let
             (x =a? (field_imm 0 param)
@@ -167,8 +212,11 @@ let[@tail_mod_cons] rec trip = function
                                 (consts ()) (non_consts ([0: ?, value<int>]))>,
                  value<
                   (consts (0))
-                   (non_consts ([0: ?,
-                                 value<(consts (0)) (non_consts ([0: ?, *]))>]))>)
+                   (non_consts ([0:
+                                 value<
+                                  (consts ())
+                                   (non_consts ([0: ?, value<int>]))>,
+                                 value<(consts (0)) (non_consts ([0: *, *]))>]))>)
                  block2_arg0 24029))
             (seq
               (setfield_ptr(heap-init)_computed dst offset
@@ -176,18 +224,24 @@ let[@tail_mod_cons] rec trip = function
                                (consts ()) (non_consts ([0: ?, value<int>]))>,
                   value<
                    (consts (0))
-                    (non_consts ([0: ?,
+                    (non_consts ([0:
                                   value<
-                                   (consts (0)) (non_consts ([0: ?, *]))>]))>)
+                                   (consts ())
+                                    (non_consts ([0: ?, value<int>]))>,
+                                  value<
+                                   (consts (0)) (non_consts ([0: *, *]))>]))>)
                   block0_arg0
                   (makeblock 0 (value<
                                  (consts ())
                                   (non_consts ([0: ?, value<int>]))>,
                     value<
                      (consts (0))
-                      (non_consts ([0: ?,
+                      (non_consts ([0:
                                     value<
-                                     (consts (0)) (non_consts ([0: ?, *]))>]))>)
+                                     (consts ())
+                                      (non_consts ([0: ?, value<int>]))>,
+                                    value<
+                                     (consts (0)) (non_consts ([0: *, *]))>]))>)
                     block1_arg0 block)))
               (apply trip_dps block 1 (field_imm 1 param) tailcall)))
           (setfield_ptr(heap-init)_computed dst offset 0))))
@@ -208,8 +262,8 @@ let[@tail_mod_cons] rec effects f = function
      (function {nlocal = 0} f
        param[value<
               (consts (0))
-               (non_consts ([0: ?,
-                             value<(consts (0)) (non_consts ([0: ?, *]))>]))>]
+               (non_consts ([0: value<(consts ()) (non_consts ([0: ?, ?]))>,
+                             value<(consts (0)) (non_consts ([0: *, *]))>]))>]
        tail_mod_cons
        : (consts (0))
           (non_consts ([0: ?, value<(consts (0)) (non_consts ([0: ?, *]))>]))
@@ -237,8 +291,8 @@ let[@tail_mod_cons] rec effects f = function
       (function {nlocal = 0} dst offset[value<int>] f
         param[value<
                (consts (0))
-                (non_consts ([0: ?,
-                              value<(consts (0)) (non_consts ([0: ?, *]))>]))>]
+                (non_consts ([0: value<(consts ()) (non_consts ([0: ?, ?]))>,
+                              value<(consts (0)) (non_consts ([0: *, *]))>]))>]
         tail_mod_cons
         : (consts (0))
            (non_consts ([0: ?, value<(consts (0)) (non_consts ([0: ?, *]))>]))
